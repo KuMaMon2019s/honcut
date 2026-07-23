@@ -42,7 +42,7 @@ func main() {
 	renderManager := render.NewProgressManager(pipeline)
 
 	// Create MCP server
-	mcpServer := honcutserver.NewMCPServer(store, renderManager)
+	mcpServer := honcutserver.NewMCPServer(store, renderManager, outputDir)
 
 	// Stdio transport
 	scanner := bufio.NewScanner(os.Stdin)

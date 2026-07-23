@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"honcut-server/internal/render"
 
 	"github.com/google/uuid"
 )
@@ -28,8 +29,9 @@ import (
 //	PUT    /api/projects/{id}/clips/{clip_id}   — update clip
 //	DELETE /api/projects/{id}/clips/{clip_id}   — delete clip
 //	POST   /api/upload                          — upload media
-func APIHandler(store *Store) http.Handler {
+func APIHandler(store *Store, pm *render.ProgressManager, outputDir string) http.Handler {
 	mux := http.NewServeMux()
+	mcpServer := NewMCPServer(store, pm, outputDir)
 	// Project collection — POST create, GET list
 	mux.HandleFunc("POST /api/projects", func(w http.ResponseWriter, r *http.Request) {
 		createProject(w, r, store)
@@ -146,6 +148,11 @@ func APIHandler(store *Store) http.Handler {
 	// Upload
 	mux.HandleFunc("POST /api/upload", func(w http.ResponseWriter, r *http.Request) {
 		uploadHandler(w, r, store)
+	})
+
+	// MCP JSON-RPC over HTTP
+	mux.HandleFunc("POST /api/mcp", func(w http.ResponseWriter, r *http.Request) {
+		handleMCPHTTP(w, r, mcpServer)
 	})
 
 	return mux
@@ -1163,6 +1170,88 @@ func statusAPI(w http.ResponseWriter, r *http.Request, store *Store) {
 		"project_count": len(projects),
 		"message":       "Honcut server is running",
 	})
+}
+
+// ── MCP HTTP handler ─────────────────────────────────────────────────────
+
+// handleMCPHTTP handles JSON-RPC style MCP requests over HTTP POST.
+// Accepts: {"jsonrpc":"2.0","id":1,"method":"tools/list"}
+//
+//	{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"...","arguments":{}}}
+func handleMCPHTTP(w http.ResponseWriter, r *http.Request, mcpServer *MCPServer) {
+	var request struct {
+		JSONRPC string                 `json:"jsonrpc"`
+		ID      interface{}            `json:"id"`
+		Method  string                 `json:"method"`
+		Params  map[string]interface{} `json:"params"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      nil,
+			"error":   map[string]interface{}{"code": -32700, "message": "Parse error"},
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	switch request.Method {
+	case "initialize":
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"result": map[string]interface{}{
+				"protocolVersion": "2024-11-05",
+				"capabilities": map[string]interface{}{
+					"tools": map[string]interface{}{},
+				},
+				"serverInfo": map[string]interface{}{
+					"name":    "honcut-mcp",
+					"version": "1.0.0",
+				},
+			},
+		})
+
+	case "tools/list":
+		tools := mcpServer.ListTools()
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"result": map[string]interface{}{
+				"tools": tools,
+			},
+		})
+
+	case "tools/call":
+		result, err := mcpServer.HandleMCPRequest("tools/call", request.Params)
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      request.ID,
+				"error":   map[string]interface{}{"code": -32603, "message": err.Error()},
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"result":  result,
+		})
+
+	case "notifications/initialized":
+		// Notification — no response body needed, but return 204
+		w.WriteHeader(http.StatusNoContent)
+
+	default:
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"error":   map[string]interface{}{"code": -32601, "message": fmt.Sprintf("Method not found: %s", request.Method)},
+		})
+	}
 }
 
 

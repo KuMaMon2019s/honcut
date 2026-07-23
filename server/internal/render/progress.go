@@ -200,6 +200,36 @@ func (pm *ProgressManager) CancelJob(id string) error {
 	return nil
 }
 
+// JobSnapshot is a thread-safe copy of a RenderJob's public state.
+type JobSnapshot struct {
+	ID          string
+	ProjectID   string
+	Status      RenderStatus
+	Progress    int
+	OutputPath  string
+	Error       string
+	CreatedAt   time.Time
+	StartedAt   *time.Time
+	CompletedAt *time.Time
+}
+
+// Snapshot returns a thread-safe copy of the job's current state.
+func (j *RenderJob) Snapshot() JobSnapshot {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return JobSnapshot{
+		ID:          j.ID,
+		ProjectID:   j.ProjectID,
+		Status:      j.Status,
+		Progress:    j.Progress,
+		OutputPath:  j.OutputPath,
+		Error:       j.Error,
+		CreatedAt:   j.CreatedAt,
+		StartedAt:   j.StartedAt,
+		CompletedAt: j.CompletedAt,
+	}
+}
+
 // CleanupOldJobs removes completed jobs older than the given duration
 func (pm *ProgressManager) CleanupOldJobs(olderThan time.Duration) {
 	cutoff := time.Now().Add(-olderThan)

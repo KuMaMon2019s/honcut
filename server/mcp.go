@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"honcut-server/internal/render"
 
@@ -19,18 +20,20 @@ type MCPTool struct {
 
 // MCPServer handles MCP tool registration and execution
 type MCPServer struct {
-	store   *Store
-	pm      *render.ProgressManager
-	tools   map[string]func(map[string]interface{}) (interface{}, error)
-	editors []map[string]interface{} // connected editor sessions
+	store     *Store
+	pm        *render.ProgressManager
+	outputDir string
+	tools     map[string]func(map[string]interface{}) (interface{}, error)
+	editors   []map[string]interface{} // connected editor sessions
 }
 
 // NewMCPServer creates a new MCP server with the given store
-func NewMCPServer(store *Store, pm *render.ProgressManager) *MCPServer {
+func NewMCPServer(store *Store, pm *render.ProgressManager, outputDir string) *MCPServer {
 	server := &MCPServer{
-		store: store,
-		pm:    pm,
-		tools: make(map[string]func(map[string]interface{}) (interface{}, error)),
+		store:     store,
+		pm:        pm,
+		outputDir: outputDir,
+		tools:     make(map[string]func(map[string]interface{}) (interface{}, error)),
 	}
 	server.registerTools()
 	return server
@@ -1585,18 +1588,34 @@ func (s *MCPServer) submitRenderJob(params map[string]interface{}) (interface{},
 		return nil, fmt.Errorf("project_id is required")
 	}
 
-	// Generate job ID
-	jobID := "render_" + uuid.New().String()[:8]
+	if s.pm == nil {
+		return nil, fmt.Errorf("render pipeline not configured")
+	}
 
-	// Note: This is a placeholder. The actual render job submission
-	// would integrate with the render pipeline in internal/render/
-	// For now, return a placeholder response
+	// Verify project exists
+	project, err := s.store.Get(projectID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get project: %w", err)
+	}
+	if project == nil {
+		return nil, fmt.Errorf("project not found: %s", projectID)
+	}
+
+	// Generate job ID and create the job
+	jobID := "render_" + uuid.New().String()[:8]
+	job := s.pm.CreateJob(jobID, projectID)
+
+	// Start the real render
+	if err := s.pm.StartRender(jobID, s.outputDir); err != nil {
+		return nil, fmt.Errorf("failed to start render: %w", err)
+	}
+
 	return map[string]interface{}{
 		"success":    true,
-		"job_id":     jobID,
-		"project_id": projectID,
-		"status":     "pending",
-		"message":    "Render job submitted (placeholder - integrate with render pipeline)",
+		"job_id":     job.ID,
+		"project_id": job.ProjectID,
+		"status":     string(job.Status),
+		"message":    "Render job submitted and started",
 	}, nil
 }
 
@@ -1612,35 +1631,85 @@ func (s *MCPServer) trackExport(params map[string]interface{}) (interface{}, err
 		return nil, fmt.Errorf("job_id is required")
 	}
 
-	// Placeholder implementation - would integrate with render.ProgressManager
+	if s.pm == nil {
+		return nil, fmt.Errorf("render pipeline not configured")
+	}
+
+	job, found := s.pm.GetJob(jobID)
+	if !found {
+		return nil, fmt.Errorf("job not found: %s", jobID)
+	}
+
 	switch action {
 	case "status":
-		return map[string]interface{}{
-			"success": true,
-			"job_id":  jobID,
-			"status":  "pending",
-			"message": "Status check (placeholder - integrate with render.ProgressManager)",
-		}, nil
+		snap := job.Snapshot()
+		result := map[string]interface{}{
+			"success":    true,
+			"job_id":     snap.ID,
+			"project_id": snap.ProjectID,
+			"status":     string(snap.Status),
+			"progress":   snap.Progress,
+		}
+		if snap.OutputPath != "" {
+			result["output_path"] = snap.OutputPath
+		}
+		if snap.Error != "" {
+			result["error"] = snap.Error
+		}
+		return result, nil
 
 	case "wait":
 		timeout := 45
 		if t, ok := params["timeout"].(float64); ok {
 			timeout = int(t)
 		}
+		deadline := time.Now().Add(time.Duration(timeout) * time.Second)
+		for time.Now().Before(deadline) {
+			snap := job.Snapshot()
+			if snap.Status == render.StatusCompleted || snap.Status == render.StatusFailed || snap.Status == render.StatusCancelled {
+				result := map[string]interface{}{
+					"success":  true,
+					"job_id":   snap.ID,
+					"status":   string(snap.Status),
+					"progress": snap.Progress,
+				}
+				if snap.OutputPath != "" {
+					result["output_path"] = snap.OutputPath
+					result["download_url"] = fmt.Sprintf("/api/render/%s/download", snap.ID)
+				}
+				if snap.Error != "" {
+					result["error"] = snap.Error
+				}
+				return result, nil
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		// Timeout — return current status
+		snap := job.Snapshot()
 		return map[string]interface{}{
-			"success":      true,
-			"job_id":       jobID,
-			"status":       "completed",
-			"message":      fmt.Sprintf("Wait completed after %ds (placeholder)", timeout),
-			"download_url": fmt.Sprintf("/api/render/download/%s", jobID),
+			"success":  true,
+			"job_id":   snap.ID,
+			"status":   string(snap.Status),
+			"progress": snap.Progress,
+			"message":  fmt.Sprintf("Wait timed out after %ds, job still %s", timeout, snap.Status),
 		}, nil
 
 	case "result":
+		snap := job.Snapshot()
+		if snap.Status != render.StatusCompleted {
+			return map[string]interface{}{
+				"success": true,
+				"job_id":  snap.ID,
+				"status":  string(snap.Status),
+				"message": "Render not completed yet",
+			}, nil
+		}
 		return map[string]interface{}{
 			"success":      true,
-			"job_id":       jobID,
-			"download_url": fmt.Sprintf("/api/render/download/%s", jobID),
-			"message":      "Result URL (placeholder)",
+			"job_id":       snap.ID,
+			"status":       string(snap.Status),
+			"output_path":  snap.OutputPath,
+			"download_url": fmt.Sprintf("/api/render/%s/download", snap.ID),
 		}, nil
 
 	default:

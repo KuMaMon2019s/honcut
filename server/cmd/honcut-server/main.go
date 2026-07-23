@@ -81,8 +81,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
 
-	// Mount REST API handler (projects CRUD + upload)
-	apiHandler := honcutserver.APIHandler(store)
+	// Mount REST API handler (projects CRUD + upload + MCP)
+	apiHandler := honcutserver.APIHandler(store, renderManager, outputDir)
 	mux.Handle("/api/", apiHandler)
 
 	// Mount render API handler

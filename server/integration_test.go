@@ -93,8 +93,8 @@ func TestIntegration_REST_MCP_SQLite_EndToEnd(t *testing.T) {
 	store := setupTestDB(t)
 	defer store.Close()
 
-	apiHandler := APIHandler(store)
-	mcpServer := NewMCPServer(store, nil)
+	apiHandler := APIHandler(store, nil, "/tmp/honcut-test")
+	mcpServer := NewMCPServer(store, nil, "")
 
 	// ── Step 1: REST — Create project ──────────────────────
 	t.Log("Step 1: REST POST /api/projects — create project")
@@ -230,7 +230,7 @@ func TestIntegration_REST_MCP_SQLite_EndToEnd(t *testing.T) {
 func TestMCP_ToolRegistration(t *testing.T) {
 	store := setupTestDB(t)
 	defer store.Close()
-	mcp := NewMCPServer(store, nil)
+	mcp := NewMCPServer(store, nil, "")
 
 	tools := mcp.ListTools()
 	if len(tools) != 35 {
@@ -258,7 +258,7 @@ func TestMCP_ToolRegistration(t *testing.T) {
 func TestMCP_EditNonExistent(t *testing.T) {
 	store := setupTestDB(t)
 	defer store.Close()
-	mcp := NewMCPServer(store, nil)
+	mcp := NewMCPServer(store, nil, "")
 
 	result, err := mcp.HandleMCPRequest("tools/call", map[string]interface{}{
 		"name": "edit_project",
@@ -281,7 +281,7 @@ func TestMCP_EditNonExistent(t *testing.T) {
 func TestMCP_ToolsList(t *testing.T) {
 	store := setupTestDB(t)
 	defer store.Close()
-	mcp := NewMCPServer(store, nil)
+	mcp := NewMCPServer(store, nil, "")
 
 	result, err := mcp.HandleMCPRequest("tools/list", nil)
 	if err != nil {
@@ -301,7 +301,7 @@ func TestMCP_ToolsList(t *testing.T) {
 func TestREST_CRUDCycle(t *testing.T) {
 	store := setupTestDB(t)
 	defer store.Close()
-	handler := APIHandler(store)
+	handler := APIHandler(store, nil, "/tmp/honcut-test")
 
 	// Create
 	do := func(method, path string, body string) *httptest.ResponseRecorder {
@@ -360,7 +360,7 @@ func TestREST_CRUDCycle(t *testing.T) {
 func TestREST_Validation(t *testing.T) {
 	store := setupTestDB(t)
 	defer store.Close()
-	handler := APIHandler(store)
+	handler := APIHandler(store, nil, "/tmp/honcut-test")
 
 	// Missing id
 	req := httptest.NewRequest("POST", "/api/projects", bytes.NewBufferString(`{"name":"No ID"}`))

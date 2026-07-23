@@ -82,6 +82,7 @@ rg "func.*readTimeline|uploadMedia" server/mcp.go   # 读取/上传 (line 476-50
   - `DELETE /api/projects/{id}/assets/{asset_id}` → `server/api.go:126` (deleteAsset) ✨ Batch B
   - `PATCH /api/projects/{id}/assets/{asset_id}` → `server/api.go:129` (renameAsset) ✨ Batch B
   - `POST /api/upload` → `server/api.go:170` (uploadHandler)
+  - `POST /api/mcp` → `server/api.go:154` (MCP JSON-RPC via HTTP) 🆕 B1 fix
 - **Go 1.22 路由模式:** 使用 `METHOD /path/{wildcard}` + `r.PathValue()`
 
 ### Feature: Go MCP 服务器
@@ -116,7 +117,18 @@ rg "func.*readTimeline|uploadMedia" server/mcp.go   # 读取/上传 (line 476-50
   - `manage_media_pool` → `server/mcp.go:1477` (manageMediaPool) ✨ Batch B
   - `browse_library` → `server/mcp.go:1523` (browseLibrary) ✨ Batch B
   - `manage_design_style` → `server/mcp.go:1543` (manageDesignStyle) ✨ Batch B
+  - `list_templates` → `server/mcp.go:1580` (listTemplates) ✨ Batch C
+  - `search_templates` → `server/mcp.go:1600` (searchTemplates) ✨ Batch C
+  - `add_motion_graphic` → `server/mcp.go:1623` (addMotionGraphic) ✨ Batch C
+  - `submit_motion_graphic` → `server/mcp.go:1654` (submitMotionGraphic) ✨ Batch C
+  - `read_script` → `server/mcp.go:1670` (readScript) ✨ Batch C
+  - `apply_script` → `server/mcp.go:1700` (applyScript) ✨ Batch C
+  - `submit_render_job` → `server/mcp.go:1750` (submitRenderJob) 🆕 D3 fix
+  - `track_export` → `server/mcp.go:1800` (trackExport) 🆕 D3 fix
+  - `openchatcut_status` → `server/mcp.go:1850` (openchatcutStatus) 🆕 D2 fix
+  - `ToolSearch` → `server/mcp.go:1880` (ToolSearch) ✨ Batch C
 - **请求处理:** `server/mcp.go:505` (HandleMCPRequest)
+- **双通道:** HTTP (`POST /api/mcp`) + stdio (`honcut-mcp` 二进制)
 
 ### Feature: SQLite 存储层
 **Purpose:** 项目、资产、时间线片段、转场持久化
@@ -262,9 +274,9 @@ rg "func.*readTimeline|uploadMedia" server/mcp.go   # 读取/上传 (line 476-50
 
 | 文件 | 行数 | 重要性 | 说明 |
 |------|------|--------|------|
-| `server/api.go` | 1055 | 🔴 核心 | REST API — 25+ 端点 + Go 1.22 wildcard 路由 |
-| `server/store.go` | 965 | 🔴 核心 | SQLite 存储层，30+ 个 CRUD 方法（含 Batch B: timelines/tracks/design_styles） |
-| `server/mcp.go` | 2000 | 🔴 核心 | 25 个 MCP 工具实现（Batch A: 10 + Batch B: 8） |
+| `server/api.go` | 1257 | 🔴 核心 | REST API — 30+ 端点 + POST /api/mcp (MCP via HTTP) |
+| `server/store.go` | 965 | 🔴 核心 | SQLite — 7 表 39 方法（projects/assets/items/transitions/timelines/tracks/design_styles） |
+| `server/mcp.go` | 2226 | 🔴 核心 | 35 个 MCP 工具（全部 Batch A/B/C） |
 | `server/internal/render/progress.go` | 514 | 🔴 核心 | ffmpeg 管道 + 进度管理（Phase 2） |
 | `server/internal/render/api.go` | 170 | 🟡 重要 | 渲染 REST 端点 |
 | `server/cmd/honcut-server/main.go` | 98 | 🟡 重要 | HTTP 服务器入口 |
@@ -327,10 +339,10 @@ Go HTTP Server (8080)
   └─ 知识库搜索 → Qdrant (knowledge_base collection)
 
 AI Agent
-  ↓ stdio
-MCP Server
+  ↓ stdio / HTTP POST /api/mcp
+MCP Server（双通道）
   ↓
-  └─ MCP Tools → Store → SQLite
+  └─ 35 MCP Tools → Store → SQLite
 ```
 
 ---
@@ -341,7 +353,8 @@ MCP Server
 - [x] ✅ ~~Phase 2: ffmpeg 渲染管道~~ — clips CRUD + render API + 进度管理
 - [x] ✅ ~~Phase 3 Batch A: 10 个 MCP 工具~~ — list_projects, create_project, read_project, clear_timeline, split_item, duplicate_item, remove_item, move_item, update_item_props, set_item_timing
 - [x] ✅ ~~Phase 3 Batch B: 8 个 MCP 工具~~ — manage_timelines, edit_track, set_aspect_ratio, list_audio, add_audio, manage_media_pool, browse_library, manage_design_style
-- [ ] Phase 3 Batch C: 剩余工具（模板、脚本、导出等）
+- [x] ✅ ~~Phase 3 Batch C: 10 个 MCP 工具~~ — templates, script, export, status, ToolSearch
+- [x] ✅ E2E 缺陷修复 — POST /api/mcp, editors 字段, ProgressManager 连接, outputDir
 - [ ] Phase 4: 前后端集成（Vite 代理 → Go API、WebSocket 实时通知）
 - [ ] 废弃 `server/plugins/view-api.ts`（旧版 TypeScript 插件）
 
