@@ -68,11 +68,20 @@ func APIHandler(store *Store, pm *render.ProgressManager, outputDir string) http
 	})
 	mux.HandleFunc("DELETE /api/projects/{id}/clips/{clip_id}", func(w http.ResponseWriter, r *http.Request) {
 		deleteClip(w, r, store, r.PathValue("clip_id"))
+	})
 
 	// Transitions
 	mux.HandleFunc("GET /api/projects/{id}/transitions", func(w http.ResponseWriter, r *http.Request) {
 		listTransitions(w, r, store, r.PathValue("id"))
 	})
+	mux.HandleFunc("POST /api/projects/{id}/transitions", func(w http.ResponseWriter, r *http.Request) {
+		createTransition(w, r, store, r.PathValue("id"))
+	})
+	mux.HandleFunc("PATCH /api/projects/{id}/transitions/{transition_id}", func(w http.ResponseWriter, r *http.Request) {
+		updateTransition(w, r, store, r.PathValue("id"), r.PathValue("transition_id"))
+	})
+	mux.HandleFunc("DELETE /api/projects/{id}/transitions/{transition_id}", func(w http.ResponseWriter, r *http.Request) {
+		deleteTransition(w, r, store, r.PathValue("id"), r.PathValue("transition_id"))
 	})
 
 	// New endpoints for Batch A tools
@@ -503,6 +512,14 @@ func listClips(w http.ResponseWriter, r *http.Request, store *Store, projectID s
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Backfill empty src from linked asset
+	for _, c := range clips {
+		if c.Src == "" && c.AssetID != "" {
+			if asset, err := store.GetAsset(c.AssetID); err == nil && asset != nil {
+				c.Src = asset.Src
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(clips)
 }
@@ -516,6 +533,12 @@ func getClip(w http.ResponseWriter, r *http.Request, store *Store, clipID string
 	if clip == nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
+	}
+	// Backfill empty src from linked asset
+	if clip.Src == "" && clip.AssetID != "" {
+		if asset, err := store.GetAsset(clip.AssetID); err == nil && asset != nil {
+			clip.Src = asset.Src
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(clip)
@@ -1331,4 +1354,104 @@ func listTransitions(w http.ResponseWriter, r *http.Request, store *Store, proje
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(transitions)
+}
+
+type transitionCreateRequest struct {
+	FromItemID     string `json:"from_item_id"`
+	ToItemID       string `json:"to_item_id"`
+	Type           string `json:"type"`
+	DurationFrames int    `json:"duration_frames"`
+}
+
+// createTransition creates a transition between two timeline items
+func createTransition(w http.ResponseWriter, r *http.Request, store *Store, projectID string) {
+	var req transitionCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if req.FromItemID == "" || req.ToItemID == "" {
+		http.Error(w, "from_item_id and to_item_id required", http.StatusBadRequest)
+		return
+	}
+	if req.Type == "" {
+		req.Type = "dissolve"
+	}
+	if req.DurationFrames == 0 {
+		req.DurationFrames = 24
+	}
+
+	trans := &Transition{
+		ID:             uuid.New().String(),
+		ProjectID:      projectID,
+		FromItemID:     req.FromItemID,
+		ToItemID:       req.ToItemID,
+		Type:           req.Type,
+		DurationFrames: req.DurationFrames,
+	}
+
+	if err := store.CreateTransition(trans); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(trans)
+}
+
+// updateTransition updates type and/or duration_frames of a transition
+func updateTransition(w http.ResponseWriter, r *http.Request, store *Store, projectID, transitionID string) {
+	existing, err := store.GetTransition(transitionID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if existing == nil || existing.ProjectID != projectID {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	var req struct {
+		Type           string `json:"type"`
+		DurationFrames int    `json:"duration_frames"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if req.Type != "" {
+		existing.Type = req.Type
+	}
+	if req.DurationFrames > 0 {
+		existing.DurationFrames = req.DurationFrames
+	}
+
+	if err := store.UpdateTransition(existing); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(existing)
+}
+
+// deleteTransition removes a transition
+func deleteTransition(w http.ResponseWriter, r *http.Request, store *Store, projectID, transitionID string) {
+	existing, err := store.GetTransition(transitionID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if existing == nil || existing.ProjectID != projectID {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	if err := store.DeleteTransition(transitionID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

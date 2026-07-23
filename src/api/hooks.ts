@@ -185,6 +185,13 @@ export function useClipActions(projectId: string) {
   return { create, update, remove, split, duplicate, updateProps, updateTiming };
 }
 
+export function useTransitionActions(projectId: string) {
+  const create = useCallback((body: { from_item_id: string; to_item_id: string; type?: string; duration_frames?: number }) => api.createTransition(projectId, body), [projectId]);
+  const update = useCallback((transitionId: string, body: { type?: string; duration_frames?: number }) => api.updateTransition(projectId, transitionId, body), [projectId]);
+  const remove = useCallback((transitionId: string) => api.deleteTransition(projectId, transitionId), [projectId]);
+  return { create, update, remove };
+}
+
 export function useTimelineActions(projectId: string) {
   const create = useCallback((body: CreateTimelineBody) => api.createTimeline(projectId, body), [projectId]);
   const update = useCallback((timelineId: string, body: UpdateTimelineBody) => api.updateTimeline(projectId, timelineId, body), [projectId]);

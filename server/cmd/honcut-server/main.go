@@ -102,6 +102,11 @@ func main() {
 	renderHandler := render.RenderHandler(renderManager, outputDir)
 	mux.Handle("/api/render/", renderHandler)
 
+	// Serve uploaded media files (videos, audio, images)
+	uploadDir := filepath.Join(filepath.Dir(config.DBPath), "uploads")
+	os.MkdirAll(uploadDir, 0755)
+	mux.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadDir))))
+
 	// 启动服务器
 	addr := fmt.Sprintf(":%s", config.Port)
 	log.Printf("Starting honcut-server on %s", addr)

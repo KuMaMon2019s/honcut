@@ -11,3 +11,4 @@ __pycache__/
 server/honcut-server
 server/honcut-mcp
 .env
+server/honcut-server-bin

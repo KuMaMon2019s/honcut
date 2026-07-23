@@ -450,14 +450,15 @@ func (s *Store) CreateTimelineItem(item *TimelineItem) error {
 func (s *Store) GetTimelineItem(id string) (*TimelineItem, error) {
 	row := s.db.QueryRow("SELECT id, project_id, asset_id, name, kind, src, track, start_frame, duration_frames, src_in_frame, props, created_at FROM timeline_items WHERE id = ?", id)
 	var item TimelineItem
-	var assetID sql.NullString
-	if err := row.Scan(&item.ID, &item.ProjectID, &assetID, &item.Name, &item.Kind, &item.Src, &item.Track, &item.StartFrame, &item.DurationFrames, &item.SrcInFrame, &item.Props, &item.CreatedAt); err != nil {
+	var assetID, srcNull sql.NullString
+	if err := row.Scan(&item.ID, &item.ProjectID, &assetID, &item.Name, &item.Kind, &srcNull, &item.Track, &item.StartFrame, &item.DurationFrames, &item.SrcInFrame, &item.Props, &item.CreatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("query timeline item: %w", err)
 	}
 	item.AssetID = assetID.String
+	item.Src = srcNull.String
 	return &item, nil
 }
 
@@ -472,11 +473,12 @@ func (s *Store) ListTimelineItems(projectID string) ([]*TimelineItem, error) {
 	var items []*TimelineItem
 	for rows.Next() {
 		var item TimelineItem
-		var assetID sql.NullString
-		if err := rows.Scan(&item.ID, &item.ProjectID, &assetID, &item.Name, &item.Kind, &item.Src, &item.Track, &item.StartFrame, &item.DurationFrames, &item.SrcInFrame, &item.Props, &item.CreatedAt); err != nil {
+		var assetID, srcNull sql.NullString
+		if err := rows.Scan(&item.ID, &item.ProjectID, &assetID, &item.Name, &item.Kind, &srcNull, &item.Track, &item.StartFrame, &item.DurationFrames, &item.SrcInFrame, &item.Props, &item.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan timeline item: %w", err)
 		}
 		item.AssetID = assetID.String
+		item.Src = srcNull.String
 		items = append(items, &item)
 	}
 	return items, rows.Err()
@@ -593,6 +595,54 @@ func (s *Store) ListTransitions(projectID string) ([]*Transition, error) {
 	return transitions, rows.Err()
 }
 
+// GetTransition returns a single transition by ID.
+func (s *Store) GetTransition(id string) (*Transition, error) {
+	row := s.db.QueryRow("SELECT id, project_id, from_item_id, to_item_id, type, duration_frames, created_at FROM transitions WHERE id = ?", id)
+	var t Transition
+	if err := row.Scan(&t.ID, &t.ProjectID, &t.FromItemID, &t.ToItemID, &t.Type, &t.DurationFrames, &t.CreatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get transition: %w", err)
+	}
+	return &t, nil
+}
+
+// UpdateTransition updates type and/or duration_frames of a transition.
+func (s *Store) UpdateTransition(t *Transition) error {
+	res, err := s.db.Exec("UPDATE transitions SET type = ?, duration_frames = ? WHERE id = ?", t.Type, t.DurationFrames, t.ID)
+	if err != nil {
+		return fmt.Errorf("update transition: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("transition not found: %s", t.ID)
+	}
+	return nil
+}
+
+// DeleteTransition removes a transition by ID.
+func (s *Store) DeleteTransition(id string) error {
+	res, err := s.db.Exec("DELETE FROM transitions WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("delete transition: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("transition not found: %s", id)
+	}
+	return nil
+}
+
+// DeleteTransitionsByItemPair removes any existing transition between two items.
+func (s *Store) DeleteTransitionsByItemPair(fromItemID, toItemID string) error {
+	_, err := s.db.Exec("DELETE FROM transitions WHERE from_item_id = ? AND to_item_id = ?", fromItemID, toItemID)
+	if err != nil {
+		return fmt.Errorf("delete transitions by pair: %w", err)
+	}
+	return nil
+}
+
 // ─── Additional Store methods for MCP tools ────────────────────────────
 
 // DeleteAllTimelineItems deletes ALL timeline items for a project.
@@ -654,11 +704,12 @@ func (s *Store) ListTimelineItemsByTrack(projectID, track string) ([]*TimelineIt
 	var items []*TimelineItem
 	for rows.Next() {
 		var item TimelineItem
-		var assetID sql.NullString
-		if err := rows.Scan(&item.ID, &item.ProjectID, &assetID, &item.Name, &item.Kind, &item.Src, &item.Track, &item.StartFrame, &item.DurationFrames, &item.SrcInFrame, &item.Props, &item.CreatedAt); err != nil {
+		var assetID, srcNull sql.NullString
+		if err := rows.Scan(&item.ID, &item.ProjectID, &assetID, &item.Name, &item.Kind, &srcNull, &item.Track, &item.StartFrame, &item.DurationFrames, &item.SrcInFrame, &item.Props, &item.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan timeline item: %w", err)
 		}
 		item.AssetID = assetID.String
+		item.Src = srcNull.String
 		items = append(items, &item)
 	}
 	return items, rows.Err()

@@ -1,6 +1,7 @@
 // PreviewPanel.tsx — 增强预览引擎
 // 功能：帧精确 seek、错误回退、clip 信息叠加层、播放状态指示
 // R7: 修复 <video> 黑屏 + 增加预览可靠性
+// 快捷键: playing/playDirection 状态由父组件控制（useHotkeys 统一管理）
 
 import { useRef, useState, useEffect, useCallback } from "react";
 import { type Clip } from "../api/client";
@@ -11,8 +12,11 @@ interface PreviewPanelProps {
   fps: number;
   totalFrames: number;
   selectedClip: Clip | null;
+  playing: boolean;
+  playDirection: 1 | -1;
   onSelectClip: (c: Clip | null) => void;
   onPlayheadChange: (frame: number) => void;
+  onPlayingChange: (playing: boolean) => void;
 }
 
 function frameToTime(frames: number, fps: number): string {
@@ -35,10 +39,11 @@ function clipAtPlayhead(clips: Clip[], playhead: number): Clip | null {
 const btnCls = "w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-text hover:bg-hover text-sm";
 
 export default function PreviewPanel({
-  clips, playhead, fps, totalFrames, selectedClip, onSelectClip, onPlayheadChange,
+  clips, playhead, fps, totalFrames, selectedClip,
+  playing, playDirection,
+  onSelectClip, onPlayheadChange, onPlayingChange,
 }: PreviewPanelProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [playing, setPlaying] = useState(false);
   const [videoError, setVideoError] = useState(false);
   const [videoReady, setVideoReady] = useState(false);
   const [showInfo, setShowInfo] = useState(true);
@@ -76,7 +81,7 @@ export default function PreviewPanel({
     else v.pause();
   }, [playing, isVideo, activeClip?.id, videoError]);
 
-  // rAF 播放循环
+  // rAF 播放循环（支持正向/反向穿梭）
   useEffect(() => {
     if (!playing) {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -88,10 +93,10 @@ export default function PreviewPanel({
     const tick = (now: number) => {
       if (now - last >= frameDuration) {
         last = now;
-        const nextFrame = playhead + 1;
-        if (nextFrame >= totalFrames) {
-          setPlaying(false);
-          onPlayheadChange(totalFrames - 1);
+        const nextFrame = playhead + playDirection;
+        if (nextFrame < 0 || nextFrame >= totalFrames) {
+          onPlayingChange(false);
+          onPlayheadChange(Math.max(0, Math.min(totalFrames - 1, nextFrame)));
           return;
         }
         onPlayheadChange(nextFrame);
@@ -100,49 +105,21 @@ export default function PreviewPanel({
     };
     rafRef.current = requestAnimationFrame(tick);
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
-  }, [playing, playhead, fps, totalFrames, onPlayheadChange]);
+  }, [playing, playhead, fps, totalFrames, playDirection, onPlayheadChange, onPlayingChange]);
 
   const togglePlay = useCallback(() => {
     if (playhead >= totalFrames - 1) {
       onPlayheadChange(0);
-      setPlaying(true);
+      onPlayingChange(true);
     } else {
-      setPlaying(p => !p);
+      onPlayingChange(!playing);
     }
-  }, [playhead, totalFrames, onPlayheadChange]);
+  }, [playhead, totalFrames, playing, onPlayheadChange, onPlayingChange]);
 
   const stepFrame = useCallback((delta: number) => {
-    setPlaying(false);
+    onPlayingChange(false);
     onPlayheadChange(Math.max(0, Math.min(totalFrames - 1, playhead + delta)));
-  }, [playhead, totalFrames, onPlayheadChange]);
-
-  // 键盘快捷键：空格播放/暂停，左右箭头逐帧
-  useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      // 不在 input/textarea 中触发
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-
-      if (e.code === "Space") {
-        e.preventDefault();
-        togglePlay();
-      } else if (e.code === "ArrowLeft") {
-        e.preventDefault();
-        stepFrame(e.shiftKey ? -fps : -1);
-      } else if (e.code === "ArrowRight") {
-        e.preventDefault();
-        stepFrame(e.shiftKey ? fps : 1);
-      } else if (e.code === "KeyJ") {
-        stepFrame(-fps); // J: 后退1秒
-      } else if (e.code === "KeyL") {
-        stepFrame(fps); // L: 前进1秒
-      } else if (e.code === "KeyK") {
-        setPlaying(false); // K: 暂停
-      }
-    };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [togglePlay, stepFrame, fps]);
+  }, [playhead, totalFrames, onPlayheadChange, onPlayingChange]);
 
   return (
     <div className="flex-1 min-w-0 flex flex-col bg-bg">
@@ -234,7 +211,9 @@ export default function PreviewPanel({
         {playing && (
           <div className="absolute top-2 right-2 flex items-center gap-1 bg-black/60 rounded px-2 py-1">
             <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-            <span className="text-[10px] text-white/70">PLAY</span>
+            <span className="text-[10px] text-white/70">
+              {playDirection === 1 ? "PLAY ▶" : "◀ REV"}
+            </span>
           </div>
         )}
       </div>
@@ -250,6 +229,13 @@ export default function PreviewPanel({
           {playing ? "⏸" : "▶"}
         </button>
         <button className={btnCls} onClick={() => stepFrame(1)} title="前进1帧 (→)">⏭</button>
+
+        {/* JKL 穿梭指示 */}
+        {playing && (
+          <span className="text-[10px] text-accent font-mono ml-1">
+            {playDirection === 1 ? "L" : "J"}
+          </span>
+        )}
 
         {/* 信息叠加层开关 */}
         <button

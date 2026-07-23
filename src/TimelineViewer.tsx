@@ -11,10 +11,12 @@ import MediaPlayer from "./components/MediaPlayer";
 import Ruler from "./components/Ruler";
 import TrackLane from "./components/TrackLane";
 import ResizeHandle from "./components/ResizeHandle";
+import ContextMenu from "./components/ContextMenu";
 import { type ClipData } from "./components/ClipBlock";
 import { useProject, useClips, useTransitions, useTimelines } from "./api/hooks";
 import { api, type Clip as ApiClip, type Transition as ApiTransition } from "./api/client";
 import { useUndo } from "./hooks/useUndo";
+import { useHotkeys } from "./hooks/useHotkeys";
 
 // ── 工具 ──
 
@@ -54,21 +56,36 @@ function mapClip(c: ApiClip): ClipData {
   };
 }
 
+// 拖拽 undo 条目：记录片段移动前后的位置
+interface TimingUndoEntry {
+  type: "timing";
+  clipId: string;
+  before: { start_frame: number; track: string };
+  after: { start_frame: number; track: string };
+}
+
 // ── 组件 ──
 
 export default function TimelineViewer({ projectId, onBack }: { projectId: string; onBack?: () => void }) {
   // ── 数据层：hooks ──
   const { data: project, loading: projectLoading, error: projectError } = useProject(projectId);
   const { data: rawClips, loading: clipsLoading, reload: reloadClips } = useClips(projectId);
-  const { data: rawTransitions, loading: transitionsLoading } = useTransitions(projectId);
+  const { data: rawTransitions, loading: transitionsLoading, reload: reloadTransitions } = useTransitions(projectId);
   const { data: timelines } = useTimelines(projectId);
 
   // ── UI 状态 ──
   const [playhead, setPlayhead] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [playDirection, setPlayDirection] = useState<1 | -1>(1);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [selectedTransitionId, setSelectedTransitionId] = useState<string | null>(null);
   const [selectedMedia, setSelectedMedia] = useState<{ src: string; kind: "video" | "audio"; name: string } | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [zoomIdx, setZoomIdx] = useState(DEFAULT_ZOOM_IDX);
+  const [toast, setToast] = useState<string | null>(null);
+
+  // ── 右键菜单状态 ──
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; clip: ClipData } | null>(null);
 
   // ── R9: 面板宽度状态 ──
   const [sidebarWidth, setSidebarWidth] = useState(260);
@@ -120,6 +137,12 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
 
   const handleSelectClip = useCallback((clip: ClipData) => {
     setSelectedClipId(prev => prev === clip.id ? null : clip.id);
+    setSelectedTransitionId(null);
+  }, []);
+
+  const handleSelectTransition = useCallback((t: ApiTransition) => {
+    setSelectedTransitionId(prev => prev === t.id ? null : t.id);
+    setSelectedClipId(null);
   }, []);
 
   const handleDeselect = useCallback(() => setSelectedClipId(null), []);
@@ -138,42 +161,269 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
     }
   }, [clipsSnapshot]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Toast 提示 ──
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 1500);
+  }, []);
+
+  // 拖拽操作的 undo 栈（useUndo 只做快照式 UI undo，这里记录 before/after 以便写回 API）
+  const timingUndoStack = useRef<TimingUndoEntry[]>([]);
+
   const handleUndo = useCallback(() => {
+    // 优先撤销最近一次拖拽：把 before 位置写回 API
+    const entry = timingUndoStack.current.pop();
+    if (entry) {
+      api.updateClip(projectId, entry.clipId, { start_frame: entry.before.start_frame, track: entry.before.track })
+        .then(() => { showToast("↩ 已撤销拖拽"); reloadClips(); })
+        .catch(e => showToast("❌ 撤销失败: " + (e as Error).message));
+      return;
+    }
     undoState.undo();
     // undo 后需要把快照写回 API（逐 clip 更新 timing）
     // 简化实现：undo 后 reload，让 UI 反映 API 状态
     // 完整实现需要 diff 快照并逐条 PATCH — 当前阶段先做 UI 级 undo
-  }, [undoState]);
+  }, [projectId, reloadClips, showToast, undoState]);
 
   const handleRedo = useCallback(() => {
     undoState.redo();
   }, [undoState]);
 
-  // 全局快捷键：⌘Z / ⌘⇧Z
-  useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-
-      if ((e.metaKey || e.ctrlKey) && e.code === "KeyZ") {
-        e.preventDefault();
-        if (e.shiftKey) handleRedo();
-        else handleUndo();
-      }
-    };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [handleUndo, handleRedo]);
-
-  // 拖拽片段 → 更新 startFrame（带 undo 快照）
-  const handleClipDragEnd = useCallback(async (clipId: string, newStartFrame: number) => {
+  // ── C 分割：在播放头位置分割选中 clip ──
+  const handleSplit = useCallback(async () => {
+    if (!selectedClipId) {
+      showToast("⚠️ 请先选中一个片段再按 C 分割");
+      return;
+    }
+    const clip = clips.find(c => c.id === selectedClipId);
+    if (!clip) return;
+    // 播放头必须在片段范围内
+    if (playhead <= clip.start_frame || playhead >= clip.start_frame + clip.duration_frames) {
+      showToast("⚠️ 播放头不在选中片段范围内");
+      return;
+    }
     try {
-      await api.updateClipTiming(projectId, clipId, { start_frame: newStartFrame });
+      const result = await api.splitClip(projectId, selectedClipId, { at_frame: playhead });
+      if (result.success) {
+        showToast(`✂️ 已分割 → ${result.split_id.slice(0, 8)}…`);
+        reloadClips();
+      }
+    } catch (e) {
+      showToast("❌ 分割失败: " + (e as Error).message);
+    }
+  }, [selectedClipId, clips, playhead, projectId, reloadClips, showToast]);
+
+  // ── Delete 删除选中片段 ──
+  const handleDelete = useCallback(async () => {
+    if (!selectedClipId) return;
+    try {
+      await api.deleteClip(projectId, selectedClipId);
+      showToast("🗑️ 已删除片段");
+      setSelectedClipId(null);
+      reloadClips();
+    } catch (e) {
+      showToast("❌ 删除失败: " + (e as Error).message);
+    }
+  }, [selectedClipId, projectId, reloadClips, showToast]);
+
+  // ── Ctrl+D 复制选中片段（追加到轨道末尾）──
+  const handleDuplicate = useCallback(async () => {
+    if (!selectedClipId) {
+      showToast("⚠️ 请先选中一个片段再复制");
+      return;
+    }
+    try {
+      await api.duplicateClip(projectId, selectedClipId);
+      showToast("📋 已复制片段");
+      reloadClips();
+    } catch (e) {
+      showToast("❌ 复制失败: " + (e as Error).message);
+    }
+  }, [selectedClipId, projectId, reloadClips, showToast]);
+
+  // ── 右键菜单 ──
+  const handleContextMenu = useCallback((e: React.MouseEvent, clip: ClipData) => {
+    e.preventDefault();
+    setSelectedClipId(clip.id);
+    setContextMenu({ x: e.clientX, y: e.clientY, clip });
+  }, []);
+
+  // 添加转场：找同轨道、起始帧 ≥ 当前片段结束帧的最近片段
+  const handleAddTransition = useCallback(async (type: string) => {
+    if (!contextMenu) return;
+    const clip = contextMenu.clip;
+    const sameTrack = clipDataItems
+      .filter(c => c.track === clip.track && c.id !== clip.id)
+      .sort((a, b) => a.startFrame - b.startFrame);
+    const nextClip = sameTrack.find(c => c.startFrame >= clip.startFrame + clip.durationInFrames);
+    if (!nextClip) {
+      showToast("⚠️ 同轨道没有后续片段，无法添加转场");
+      return;
+    }
+    try {
+      await api.createTransition(projectId, {
+        from_item_id: clip.id,
+        to_item_id: nextClip.id,
+        type: type.toLowerCase(),
+        duration_frames: 24,
+      });
+      showToast(`🔗 已添加 ${type} 转场`);
+      reloadTransitions();
+    } catch (e) {
+      showToast("❌ 添加转场失败: " + (e as Error).message);
+    }
+  }, [contextMenu, clipDataItems, projectId, reloadTransitions, showToast]);
+
+  // ── 全局快捷键（useHotkeys 统一管理）──
+  useHotkeys({
+    onPlayPause: () => {
+      if (playhead >= totalFrames - 1) {
+        setPlayhead(0);
+        setPlayDirection(1);
+        setPlaying(true);
+      } else {
+        setPlaying(p => !p);
+      }
+    },
+    onPause: () => {
+      setPlaying(false);
+      showToast("⏸ K — 暂停");
+    },
+    onStepBack: () => {
+      // J: 反向穿梭（按一次反向播放，再按加速）
+      if (playing && playDirection === -1) {
+        showToast("⏪ JJ — 加速后退");
+        // 加速：直接跳 fps 帧
+        setPlaying(false);
+        setPlayhead(h => Math.max(0, h - fps));
+      } else {
+        setPlayDirection(-1);
+        setPlaying(true);
+        showToast("◀ J — 反向播放");
+      }
+    },
+    onStepForward: () => {
+      // L: 正向穿梭（按一次正向播放，再按加速）
+      if (playing && playDirection === 1) {
+        showToast("⏩ LL — 加速前进");
+        setPlaying(false);
+        setPlayhead(h => Math.min(totalFrames - 1, h + fps));
+      } else {
+        setPlayDirection(1);
+        setPlaying(true);
+        showToast("▶ L — 正向播放");
+      }
+    },
+    onSplit: handleSplit,
+    onDelete: handleDelete,
+    onDuplicate: handleDuplicate,
+    onUndo: handleUndo,
+    onRedo: handleRedo,
+    onFrameBack: () => {
+      setPlaying(false);
+      setPlayhead(h => Math.max(0, h - 1));
+    },
+    onFrameForward: () => {
+      setPlaying(false);
+      setPlayhead(h => Math.min(totalFrames - 1, h + 1));
+    },
+  });
+
+  // ── 片段拖拽：跨轨目标检测 ──
+  const [dragInfo, setDragInfo] = useState<{ clipId: string; targetTrack: string } | null>(null);
+  const dragTargetTrackRef = useRef<string | null>(null);
+
+  // 拖拽中鼠标移动 → 计算目标轨道（仅同类型轨道：video→video, audio→audio）
+  const handleClipDragMove = useCallback((clip: ClipData, _clientX: number, clientY: number) => {
+    const sameTypeTracks = sortedTrackIds.filter(t => t[0] === clip.track[0]);
+    let target: string | null = null;
+    // 鼠标落在某个同类型轨道的 lane 范围内 → 该轨道
+    for (const tid of sameTypeTracks) {
+      const el = document.querySelector(`[data-track-id="${tid}"]`);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (clientY >= r.top && clientY <= r.bottom) { target = tid; break; }
+    }
+    // 超出所有 lane 范围 → 按垂直方向取相邻同类型轨道
+    if (!target) {
+      const origEl = document.querySelector(`[data-track-id="${clip.track}"]`);
+      const origRect = origEl?.getBoundingClientRect();
+      if (origRect) {
+        const dir = clientY < origRect.top ? -1 : clientY > origRect.bottom ? 1 : 0;
+        const idx = sameTypeTracks.indexOf(clip.track);
+        if (dir !== 0 && idx >= 0 && sameTypeTracks[idx + dir]) {
+          target = sameTypeTracks[idx + dir];
+        }
+      }
+    }
+    const finalTarget = target ?? clip.track;
+    dragTargetTrackRef.current = finalTarget;
+    setDragInfo(prev => (prev && prev.clipId === clip.id && prev.targetTrack === finalTarget)
+      ? prev
+      : { clipId: clip.id, targetTrack: finalTarget });
+  }, [sortedTrackIds]);
+
+  // 拖拽片段落点 → 碰撞检测 + 更新 startFrame/track + undo 记录
+  const handleClipDragEnd = useCallback(async (clipId: string, newStartFrame: number) => {
+    const targetTrack = dragTargetTrackRef.current;
+    dragTargetTrackRef.current = null;
+    setDragInfo(null);
+
+    const clip = clipDataItems.find(c => c.id === clipId);
+    if (!clip) return;
+    const newTrack = targetTrack ?? clip.track;
+    if (newStartFrame === clip.startFrame && newTrack === clip.track) return; // 无实际移动
+
+    // 碰撞检测：与目标轨道上的其他片段重叠 → 还原（不调 API）
+    const newEnd = newStartFrame + clip.durationInFrames;
+    const overlap = clipDataItems.find(c =>
+      c.id !== clipId && c.track === newTrack &&
+      newStartFrame < c.startFrame + c.durationInFrames && newEnd > c.startFrame,
+    );
+    if (overlap) {
+      showToast(`Cannot drop here - overlaps with ${overlap.name}`);
+      return;
+    }
+
+    try {
+      if (newTrack !== clip.track) {
+        await api.updateClip(projectId, clipId, { start_frame: newStartFrame, track: newTrack });
+      } else {
+        await api.updateClipTiming(projectId, clipId, { start_frame: newStartFrame });
+      }
+      timingUndoStack.current.push({
+        type: "timing",
+        clipId,
+        before: { start_frame: clip.startFrame, track: clip.track },
+        after: { start_frame: newStartFrame, track: newTrack },
+      });
       reloadClips();
     } catch (e) {
       console.error("拖拽更新失败:", e);
     }
-  }, [projectId, reloadClips]);
+  }, [clipDataItems, projectId, reloadClips, showToast]);
+
+  // 拖拽转场到轨道 → 创建转场
+  const handleTransitionDrop = useCallback(async (transitionType: string, fromClipId: string, toClipId: string) => {
+    try {
+      await api.createTransition(projectId, {
+        from_item_id: fromClipId,
+        to_item_id: toClipId,
+        type: transitionType,
+        duration_frames: 24,
+      });
+      showToast(`🔗 已添加 ${transitionType} 转场`);
+      reloadTransitions();
+    } catch (e) {
+      showToast("❌ 添加转场失败: " + (e as Error).message);
+    }
+  }, [projectId, reloadTransitions, showToast]);
+
+  // 跨轨拖拽高亮：目标轨道（排除片段原轨道）
+  const draggedClip = dragInfo ? clipDataItems.find(c => c.id === dragInfo.clipId) : undefined;
+  const dropTargetTrack = dragInfo && draggedClip && dragInfo.targetTrack !== draggedClip.track
+    ? dragInfo.targetTrack
+    : null;
 
   const zoomIn = () => setZoomIdx(i => Math.min(i + 1, ZOOM_LEVELS.length - 1));
   const zoomOut = () => setZoomIdx(i => Math.max(i - 1, 0));
@@ -315,8 +565,11 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
           fps={fps}
           totalFrames={totalFrames}
           selectedClip={selectedClip}
+          playing={playing}
+          playDirection={playDirection}
           onSelectClip={(c) => setSelectedClipId(c?.id ?? null)}
           onPlayheadChange={setPlayhead}
+          onPlayingChange={setPlaying}
         />
 
         {/* R9: 右侧拖拽条 */}
@@ -344,7 +597,10 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
       </div>
 
       {/* ═══ 底部时间线 ═══ */}
-      <div className="h-[220px] shrink-0 border-t border-border flex flex-col overflow-hidden">
+      <div
+        className="h-[220px] shrink-0 border-t border-border flex flex-col overflow-hidden"
+        onClick={() => setContextMenu(null)}
+      >
         {/* 标尺 */}
         <div className="overflow-x-auto shrink-0">
           <Ruler
@@ -364,12 +620,19 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
               key={trackId}
               trackId={trackId}
               clips={tracks.get(trackId) ?? []}
+              transitions={transitions}
               pxPerFrame={pxPerFrame}
               totalFrames={totalFrames}
               color={colorForTrack(trackId)}
               selectedClipId={selectedClipId}
+              selectedTransitionId={selectedTransitionId}
               onSelectClip={handleSelectClip}
+              onSelectTransition={handleSelectTransition}
               onClipDragEnd={handleClipDragEnd}
+              onClipDragMove={handleClipDragMove}
+              onTransitionDrop={handleTransitionDrop}
+              onContextMenu={handleContextMenu}
+              dropTarget={dropTargetTrack === trackId}
               fps={fps}
               headerWidth={headerWidth}
             />
@@ -408,6 +671,23 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
         />
       )}
 
+      {/* 片段右键菜单 */}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          clipId={contextMenu.clip.id}
+          clipName={contextMenu.clip.name}
+          canSplit={playhead > contextMenu.clip.startFrame && playhead < contextMenu.clip.startFrame + contextMenu.clip.durationInFrames}
+          canAddTransition={clipDataItems.some(c => c.track === contextMenu.clip.track && c.id !== contextMenu.clip.id && c.startFrame >= contextMenu.clip.startFrame + contextMenu.clip.durationInFrames)}
+          onSplit={handleSplit}
+          onDuplicate={handleDuplicate}
+          onDelete={handleDelete}
+          onAddTransition={handleAddTransition}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+
       {/* MediaPlayer（仅用于 SidePanel 素材预览） */}
       {selectedMedia && (
         <div
@@ -423,6 +703,25 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
           />
         </div>
       )}
+
+      {/* Toast 提示 */}
+      {toast && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[2000] bg-black/85 text-white text-sm px-4 py-2 rounded-lg shadow-lg pointer-events-none animate-pulse">
+          {toast}
+        </div>
+      )}
+
+      {/* 快捷键提示条 */}
+      <div className="fixed bottom-2 left-1/2 -translate-x-1/2 z-[1500] flex items-center gap-3 bg-black/60 text-white/50 text-[10px] px-3 py-1 rounded-full pointer-events-none">
+        <span>Space 播放/暂停</span>
+        <span>J 后退</span>
+        <span>K 暂停</span>
+        <span>L 前进</span>
+        <span>C 分割</span>
+        <span>⌘D 复制</span>
+        <span>⌘Z 撤销</span>
+        <span>Del 删除</span>
+      </div>
     </div>
   );
 }

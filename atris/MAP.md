@@ -38,13 +38,17 @@ rg "func.*readTimeline|uploadMedia" server/mcp.go   # 读取/上传 (line 476-50
 
 ## 按功能模块
 
-### Feature: 前端时间线查看器
-**Purpose:** 可视化项目时间线、片段、转场
-- **入口:** `src/main.tsx:5` (App 组件)
-- **时间线:** `src/TimelineViewer.tsx:62` (TimelineViewer 组件)
-- **播放器:** `src/components/MediaPlayer.tsx:43` (MediaPlayer 组件)
-- **渲染进度:** `src/RenderProgress.tsx:44` (RenderProgress 组件)
-- **样式常量:** `src/TimelineViewer.tsx:39-60` (TRACK_COLORS, TYPE_LABELS)
+### Feature: 前端时间线查看器 (React 19.2)
+**Purpose:** OpenChatCut 风格 UI — 三栏布局 + 暗色主题，无 Chat 面板
+- **入口:** `src/main.tsx` (parse URL params → TimelineViewer)
+- **主组件:** `src/TimelineViewer.tsx` — TopBar → [SidePanel | Preview | Inspector] → Timeline
+- **顶栏:** 项目名/fps/片段数/渲染/导出/导入/缩放（内联 TopBar）
+- **左侧:** `src/components/SidePanel.tsx` → `LibraryPanel.tsx` + `MediaPoolPanel.tsx`（Tab 切换：素材池 | 素材库）
+- **预览:** `src/components/PreviewPanel.tsx` — rAF 视频播放 + ⏮▶⏭ 控制
+- **右侧:** `src/components/InspectorPanel.tsx` — 280px 属性面板（项目信息/片段编辑）
+- **导出:** `src/components/ExportDialog.tsx` — 提交渲染 + 轮询 + 下载
+- **API:** `src/api/client.ts` + `src/api/promises.ts` — React 19 `use()` 读 Promise + `cache()`
+- **样式:** 暗色主题 (#0f0f1a bg, #e94560 accent), Tailwind CSS 类
 
 ### Feature: Go HTTP 服务器
 **Purpose:** REST API + 项目管理 + 媒体上传

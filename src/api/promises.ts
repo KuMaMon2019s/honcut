@@ -35,8 +35,8 @@ export function invalidateAll(): void {
 export const projectPromise = (id: string) =>
   cached(`project:${id}`, () => api.getProject(id));
 
-export const clipsPromise = (projectId: string) =>
-  cached(`clips:${projectId}`, () => api.listClips(projectId));
+export const clipsPromise = (projectId: string, version = 0) =>
+  cached(`clips:${projectId}:v${version}`, () => api.listClips(projectId));
 
 export const transitionsPromise = (projectId: string) =>
   cached(`transitions:${projectId}`, () => api.listTransitions(projectId));

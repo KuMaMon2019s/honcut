@@ -1,6 +1,6 @@
 // ExportDialog.tsx — 渲染导出对话框
 // 提交渲染任务 → 轮询状态 → 下载产物
-// 暗色主题：背景 #0f0f1a，面板 #1a1a2e，强调色 #e94560
+// Tailwind v4 石墨主题
 
 import { useState, useCallback } from "react";
 import { useRender, useRenderStatus } from "../api/hooks";
@@ -52,48 +52,63 @@ export default function ExportDialog({ projectId, projectName, onClose }: Export
   const progress = status?.progress ?? 0;
 
   return (
-    <div style={overlayStyle} onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={dialogStyle}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+      onClick={e => { if (e.target === e.currentTarget && phase !== "rendering") onClose(); }}
+    >
+      <div className="relative w-[420px] max-w-[90vw] bg-panel border border-border rounded-xl shadow-2xl">
         {/* 标题栏 */}
-        <div style={headerStyle}>
-          <span style={{ fontSize: 15, fontWeight: 600 }}>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+          <span className="text-base font-semibold text-text-strong">
             🎬 导出视频{projectName ? ` — ${projectName}` : ""}
           </span>
-          <button onClick={onClose} style={closeBtnStyle} title="关闭">✕</button>
+          <button
+            onClick={onClose}
+            className="text-text-dim hover:text-text text-sm px-2 py-1 rounded hover:bg-hover transition-colors"
+            title="关闭"
+          >
+            ✕
+          </button>
         </div>
 
         {/* 内容区 */}
-        <div style={{ padding: "20px 24px" }}>
+        <div className="px-6 py-5">
           {phase === "idle" && (
-            <div style={{ textAlign: "center", padding: "16px 0" }}>
-              <p style={{ color: "#8b95a5", fontSize: 13, marginBottom: 20 }}>
+            <div className="text-center py-4">
+              <p className="text-text-dim text-[13px] mb-5">
                 将当前时间线渲染为 MP4 视频文件
               </p>
-              <button onClick={handleStart} style={primaryBtnStyle}>
+              <button
+                onClick={handleStart}
+                className="w-full py-2.5 rounded-md text-sm font-semibold bg-accent text-on-accent hover:bg-accent-deep transition-colors"
+              >
                 开始渲染
               </button>
             </div>
           )}
 
           {phase === "rendering" && (
-            <div style={{ padding: "8px 0" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                <span style={{ fontSize: 13, color: "#cdd5df" }}>
+            <div className="py-2">
+              <div className="flex justify-between mb-2">
+                <span className="text-[13px] text-text-muted">
                   {status?.status === "pending" ? "排队中…" : "渲染中…"}
                 </span>
-                <span style={{ fontSize: 13, color: "#e94560", fontWeight: 600 }}>
+                <span className="text-[13px] text-accent font-semibold tabular-nums">
                   {progress}%
                 </span>
               </div>
               {/* 进度条 */}
-              <div style={progressTrackStyle}>
-                <div style={{
-                  ...progressFillStyle,
-                  width: `${Math.max(progress, 2)}%`,
-                }} />
+              <div className="h-2 rounded-full bg-panel-alt overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-accent transition-all duration-500"
+                  style={{ width: `${Math.max(progress, 2)}%` }}
+                />
               </div>
-              <div style={{ textAlign: "center", marginTop: 16 }}>
-                <button onClick={handleCancel} style={cancelBtnStyle}>
+              <div className="text-center mt-4">
+                <button
+                  onClick={handleCancel}
+                  className="px-6 py-2 rounded-md text-sm text-text-muted border border-border hover:border-danger hover:text-danger transition-colors"
+                >
                   取消渲染
                 </button>
               </div>
@@ -101,25 +116,30 @@ export default function ExportDialog({ projectId, projectName, onClose }: Export
           )}
 
           {phase === "done" && (
-            <div style={{ textAlign: "center", padding: "16px 0" }}>
-              <div style={{ fontSize: 36, marginBottom: 12 }}>✅</div>
-              <p style={{ color: "#cdd5df", fontSize: 14, marginBottom: 4 }}>渲染完成！</p>
+            <div className="text-center py-4">
+              <div className="text-3xl mb-3">✅</div>
+              <p className="text-text text-sm mb-1">渲染完成！</p>
               {status?.output_path && (
-                <p style={{ color: "#8b95a5", fontSize: 12, marginBottom: 16, wordBreak: "break-all" }}>
-                  {status.output_path}
-                </p>
+                <p className="text-text-dim text-xs mb-4 break-all">{status.output_path}</p>
               )}
-              <a href={downloadUrl ?? "#"} download style={{ textDecoration: "none" }}>
-                <button style={primaryBtnStyle}>⬇ 下载 MP4</button>
+              <a href={downloadUrl ?? "#"} download className="inline-block w-full">
+                <span className="block w-full py-2.5 rounded-md text-sm font-semibold bg-success text-bg text-center hover:opacity-90 transition-opacity">
+                  ⬇ 下载 MP4
+                </span>
               </a>
             </div>
           )}
 
           {phase === "error" && (
-            <div style={{ textAlign: "center", padding: "16px 0" }}>
-              <div style={{ fontSize: 36, marginBottom: 12 }}>❌</div>
-              <p style={{ color: "#e94560", fontSize: 14, marginBottom: 16 }}>{errorMsg}</p>
-              <button onClick={() => { setPhase("idle"); setErrorMsg(""); }} style={cancelBtnStyle}>
+            <div className="text-center py-4">
+              <div className="text-3xl mb-3">❌</div>
+              <div className="bg-danger/10 text-danger text-xs rounded p-3 break-all mb-4">
+                {errorMsg}
+              </div>
+              <button
+                onClick={() => { setPhase("idle"); setErrorMsg(""); }}
+                className="px-6 py-2 rounded-md text-sm text-text-muted border border-border hover:border-accent hover:text-accent transition-colors"
+              >
                 重试
               </button>
             </div>
@@ -129,78 +149,3 @@ export default function ExportDialog({ projectId, projectName, onClose }: Export
     </div>
   );
 }
-
-// ── 样式 ──────────────────────────────────────────────────────────────
-
-const overlayStyle: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  zIndex: 1000,
-  background: "rgba(0, 0, 0, 0.7)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-};
-
-const dialogStyle: React.CSSProperties = {
-  background: "#1a1a2e",
-  borderRadius: 12,
-  border: "1px solid #2a2a3e",
-  width: 420,
-  maxWidth: "90vw",
-  boxShadow: "0 16px 48px rgba(0, 0, 0, 0.5)",
-};
-
-const headerStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  padding: "16px 24px",
-  borderBottom: "1px solid #2a2a3e",
-  color: "#f2f5f8",
-};
-
-const closeBtnStyle: React.CSSProperties = {
-  background: "none",
-  border: "none",
-  color: "#8b95a5",
-  fontSize: 16,
-  cursor: "pointer",
-  padding: "4px 8px",
-  borderRadius: 4,
-};
-
-const primaryBtnStyle: React.CSSProperties = {
-  background: "#e94560",
-  color: "#fff",
-  border: "none",
-  borderRadius: 8,
-  padding: "10px 28px",
-  fontSize: 14,
-  fontWeight: 600,
-  cursor: "pointer",
-};
-
-const cancelBtnStyle: React.CSSProperties = {
-  background: "transparent",
-  color: "#8b95a5",
-  border: "1px solid #3a3a4e",
-  borderRadius: 8,
-  padding: "8px 24px",
-  fontSize: 13,
-  cursor: "pointer",
-};
-
-const progressTrackStyle: React.CSSProperties = {
-  height: 8,
-  background: "#0f0f1a",
-  borderRadius: 4,
-  overflow: "hidden",
-};
-
-const progressFillStyle: React.CSSProperties = {
-  height: "100%",
-  background: "linear-gradient(90deg, #e94560, #ff6b81)",
-  borderRadius: 4,
-  transition: "width 0.5s ease",
-};

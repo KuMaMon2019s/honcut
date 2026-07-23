@@ -121,6 +121,7 @@ export interface StatusResponse {
 }
 
 export interface TemplateListResponse {
+  /** GET /api/templates 返回 { categories: string[], total } — 排序后的分类名数组 */
   categories?: string[];
   total?: number;
   category?: string;
@@ -330,6 +331,18 @@ class HoncutClient {
 
   listTransitions(projectId: string): Promise<Transition[]> {
     return request<Transition[]>(`/api/projects/${enc(projectId)}/transitions`);
+  }
+
+  createTransition(projectId: string, body: { from_item_id: string; to_item_id: string; type?: string; duration_frames?: number }): Promise<Transition> {
+    return request<Transition>(`/api/projects/${enc(projectId)}/transitions`, { method: "POST", ...jsonBody(body) });
+  }
+
+  updateTransition(projectId: string, transitionId: string, body: { type?: string; duration_frames?: number }): Promise<Transition> {
+    return request<Transition>(`/api/projects/${enc(projectId)}/transitions/${enc(transitionId)}`, { method: "PATCH", ...jsonBody(body) });
+  }
+
+  deleteTransition(projectId: string, transitionId: string): Promise<void> {
+    return request<void>(`/api/projects/${enc(projectId)}/transitions/${enc(transitionId)}`, { method: "DELETE" });
   }
 
   // ── Timeline ──

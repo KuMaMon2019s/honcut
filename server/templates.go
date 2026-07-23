@@ -1,6 +1,9 @@
 package honcutserver
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // MGTemplate represents a motion-graphic template
 type MGTemplate struct {
@@ -245,13 +248,18 @@ var templateCatalog = []MGTemplate{
 	{"Data Table", "infographics", 120, 1920, 1080},
 }
 
-// ListTemplateCategories returns category names with template counts.
-func ListTemplateCategories() map[string]int {
-	counts := make(map[string]int)
+// ListTemplateCategories returns sorted unique category names.
+func ListTemplateCategories() []string {
+	seen := make(map[string]bool)
+	var cats []string
 	for _, t := range templateCatalog {
-		counts[t.Category]++
+		if !seen[t.Category] {
+			seen[t.Category] = true
+			cats = append(cats, t.Category)
+		}
 	}
-	return counts
+	sort.Strings(cats)
+	return cats
 }
 
 // ListTemplatesByCategory returns templates in a given category.

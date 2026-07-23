@@ -25,7 +25,7 @@ const EFFECT_ICONS: Record<string, string> = {
   "Chromatic Aberration": "🌈", Glow: "✨", Noise: "📺",
 };
 
-const TRANSITION_ICONS: Record<string, string> = {
+export const TRANSITION_ICONS: Record<string, string> = {
   Dissolve: "💧", Wipe: "🧹", Fade: "🌗", Slide: "↔️", "Zoom Blur": "🔍",
 };
 
@@ -152,10 +152,15 @@ export default function LibraryPanel({ projectId, selectedClip, onClipUpdated }:
             return (
               <div
                 key={name}
+                draggable
+                onDragStart={e => {
+                  e.dataTransfer.setData("application/x-transition-type", name);
+                  e.dataTransfer.effectAllowed = "copy";
+                }}
                 onClick={() => setPendingTransition(active ? null : name)}
                 onMouseEnter={e => { if (!active) e.currentTarget.style.borderColor = "#555"; }}
                 onMouseLeave={e => { if (!active) e.currentTarget.style.borderColor = "#333"; }}
-                style={chipStyle(active, false)}
+                style={{ ...chipStyle(active, false), cursor: "grab" }}
               >
                 <span style={{ fontSize: 13, flexShrink: 0 }}>{TRANSITION_ICONS[name] ?? "🔀"}</span>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
