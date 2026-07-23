@@ -59,6 +59,7 @@ export default function SidePanel({ projectId, onPreview }: SidePanelProps) {
   const [kbLoading, setKbLoading] = useState(false);
   const [kbSelected, setKbSelected] = useState<KbResult | null>(null);
   const [kbDetail, setKbDetail] = useState<Record<string, any> | null>(null);
+  const [kbDetailLoading, setKbDetailLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // ── Fetch assets ──
@@ -112,6 +113,8 @@ export default function SidePanel({ projectId, onPreview }: SidePanelProps) {
 
   const onSelectKbResult = async (r: KbResult) => {
     setKbSelected(r);
+    setKbDetail(null);
+    setKbDetailLoading(true);
     try {
       const d = await api.mcpCall("kb_read", { path: r.abs_path });
       const result = d.result as { content?: { text?: string }[] } | undefined;
@@ -127,6 +130,8 @@ export default function SidePanel({ projectId, onPreview }: SidePanelProps) {
       }
     } catch {
       setKbDetail(null);
+    } finally {
+      setKbDetailLoading(false);
     }
   };
 
@@ -408,7 +413,7 @@ export default function SidePanel({ projectId, onPreview }: SidePanelProps) {
                   }}>
                     {JSON.stringify(kbDetail, null, 2)}
                   </pre>
-                ) : kbDetail === null ? (
+                ) : kbDetailLoading ? (
                   <div style={{ marginTop: 6, fontSize: 10, color: "#555" }}>加载中…</div>
                 ) : (
                   <div style={{ marginTop: 6, fontSize: 10, color: "#666" }}>

@@ -200,6 +200,7 @@ export interface SplitClipBody {
 export interface TimingBody {
   start_frame?: number;
   duration_frames?: number;
+  src_in_frame?: number;
   fade_in_seconds?: number;
   fade_out_seconds?: number;
 }

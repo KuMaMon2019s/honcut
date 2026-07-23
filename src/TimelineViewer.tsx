@@ -1,26 +1,28 @@
-// TimelineViewer.tsx — 时间线查看器（重构版）
-// 集成 Ruler + TrackLane + ClipBlock 三组件
-// 左侧面板：SidePanel（素材池 + 素材库）
-// 支持缩放、播放头定位、片段选中
+// TimelineViewer.tsx — 时间线查看器
+// 布局: 顶栏 → 中间 [SidePanel | PreviewPanel | InspectorPanel] → 底部时间线
+// 数据层使用 api hooks，Tailwind 布局
 
-import { useState, useEffect } from "react";
-import RenderProgress from "./RenderProgress";
-import MediaPlayer from "./components/MediaPlayer";
+import { useState, useMemo, useCallback } from "react";
 import SidePanel from "./components/SidePanel";
+import PreviewPanel from "./components/PreviewPanel";
+import InspectorPanel from "./components/InspectorPanel";
+import ExportDialog from "./components/ExportDialog";
+import MediaPlayer from "./components/MediaPlayer";
 import Ruler from "./components/Ruler";
 import TrackLane from "./components/TrackLane";
 import { type ClipData } from "./components/ClipBlock";
+import { useProject, useClips, useTransitions, useTimelines } from "./api/hooks";
+import { api, type Clip as ApiClip, type Transition as ApiTransition } from "./api/client";
 
-interface Transition {
-  id: string; fromItemId: string; toItemId: string;
-  type: string; durationInFrames: number;
+// ── 工具 ──
+
+function frameToTime(f: number, fps: number): string {
+  const s = Math.floor(f / fps);
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
-interface TimelineData {
-  fps: number; items: ClipData[]; transitions: Transition[];
-}
-
-// 轨道颜色
 const TRACK_COLORS: Record<string, string> = {
   V1: "#3b82f6", V2: "#22c55e", V3: "#f59e0b", V4: "#06b6d4",
   A1: "#8b5cf6", A2: "#ec4899", A3: "#f97316",
@@ -30,122 +32,128 @@ function colorForTrack(track: string): string {
   return TRACK_COLORS[track] ?? "#6b7280";
 }
 
-function frameToTime(f: number, fps: number): string {
-  const s = Math.floor(f / fps);
-  const m = Math.floor(s / 60);
-  const sec = s % 60;
-  return `${m}:${sec.toString().padStart(2, "0")}`;
+const ZOOM_LEVELS = [1, 2, 3, 5, 8, 12];
+const DEFAULT_ZOOM_IDX = 2;
+
+function mapClip(c: ApiClip): ClipData {
+  let props: Record<string, unknown> = {};
+  if (typeof c.props === "string" && c.props) {
+    try { props = JSON.parse(c.props); } catch { /* ignore */ }
+  }
+  return {
+    id: c.id,
+    name: c.name || c.id?.slice(0, 8),
+    kind: c.kind || "video",
+    track: c.track || "V1",
+    startFrame: c.start_frame || 0,
+    durationInFrames: c.duration_frames || 60,
+    src: c.src || "",
+    props,
+  };
 }
 
-// 缩放级别 → pxPerFrame
-const ZOOM_LEVELS = [1, 2, 3, 5, 8, 12];
-const DEFAULT_ZOOM_IDX = 2; // pxPerFrame = 3
+// ── 组件 ──
 
 export default function TimelineViewer({ projectId, onBack }: { projectId: string; onBack?: () => void }) {
-  const [data, setData] = useState<TimelineData | null>(null);
-  const [error, setError] = useState("");
+  // ── 数据 hooks ──
+  const { data: project, loading: projectLoading, error: projectError } = useProject(projectId);
+  const { data: rawClips, loading: clipsLoading, reload: reloadClips } = useClips(projectId);
+  const { data: rawTransitions, loading: transitionsLoading } = useTransitions(projectId);
+  const { data: timelines } = useTimelines(projectId);
+
+  // ── UI 状态 ──
   const [playhead, setPlayhead] = useState(0);
-  const [selectedClip, setSelectedClip] = useState<ClipData | null>(null);
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [selectedMedia, setSelectedMedia] = useState<{ src: string; kind: "video" | "audio"; name: string } | null>(null);
-  const [isRendering, setIsRendering] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [zoomIdx, setZoomIdx] = useState(DEFAULT_ZOOM_IDX);
-  const [projectName, setProjectName] = useState("");
 
   const pxPerFrame = ZOOM_LEVELS[zoomIdx];
 
-  useEffect(() => {
-    Promise.all([
-      fetch(`/api/projects/${encodeURIComponent(projectId)}`).then(r => r.json()),
-      fetch(`/api/projects/${encodeURIComponent(projectId)}/clips`).then(r => r.json()),
-      fetch(`/api/projects/${encodeURIComponent(projectId)}/transitions`).then(r => r.ok ? r.json() : []).catch(() => []),
-      fetch(`/api/projects/${encodeURIComponent(projectId)}/timelines`).then(r => r.json()).catch(() => []),
-    ])
-      .then(([project, clips, transitions, timelines]) => {
-        setProjectName(project.name || projectId);
-        const items: ClipData[] = Array.isArray(clips) ? clips.map((c: any) => ({
-          id: c.id,
-          name: c.name || c.id?.slice(0, 8),
-          kind: c.kind || "video",
-          track: c.track || "V1",
-          startFrame: c.start_frame || 0,
-          durationInFrames: c.duration_frames || 60,
-          src: c.src || "",
-          props: typeof c.props === "string" ? JSON.parse(c.props || "{}") : (c.props || {}),
-        })) : [];
-        const trans = Array.isArray(transitions) ? transitions : [];
-        const tlFps = Array.isArray(timelines) && timelines.length > 0 && timelines[0].fps ? timelines[0].fps : 24;
-        setData({
-          fps: tlFps,
-          items,
-          transitions: trans.map((t: any) => ({
-            id: t.id, fromItemId: t.from_item_id, toItemId: t.to_item_id,
-            type: t.type, durationInFrames: t.duration_frames,
-          })),
-        });
-      })
-      .catch(e => setError("加载失败: " + e.message));
-  }, [projectId]);
+  // ── 派生数据 ──
+  const clips: ApiClip[] = useMemo(() => (Array.isArray(rawClips) ? rawClips : []), [rawClips]);
+  const clipDataItems: ClipData[] = useMemo(() => clips.map(mapClip), [clips]);
+  const transitions: ApiTransition[] = useMemo(() => (Array.isArray(rawTransitions) ? rawTransitions : []), [rawTransitions]);
 
-  if (error) return <div style={{ color: "#f87171", padding: 24 }}>{error}</div>;
-  if (!data) return <div style={{ color: "#888", padding: 24 }}>加载中…</div>;
+  const fps = useMemo(() => {
+    if (Array.isArray(timelines) && timelines.length > 0 && timelines[0].fps) return timelines[0].fps;
+    return 24;
+  }, [timelines]);
 
-  const { fps, items, transitions } = data;
-  const totalFrames = items.length > 0
-    ? Math.max(...items.map(i => i.startFrame + i.durationInFrames), fps * 5)
+  const loading = projectLoading || clipsLoading || transitionsLoading;
+  const error = projectError;
+  const projectName = project?.name || projectId;
+
+  const totalFrames = clipDataItems.length > 0
+    ? Math.max(...clipDataItems.map(i => i.startFrame + i.durationInFrames), fps * 5)
     : fps * 10;
 
-  // 按轨道分组
-  const tracks = new Map<string, ClipData[]>();
-  for (const item of items) {
-    const list = tracks.get(item.track) ?? [];
-    list.push(item);
-    tracks.set(item.track, list);
-  }
-  const sortedTrackIds = [...tracks.keys()].sort((a, b) => {
-    const aIsAudio = a.startsWith("A");
-    const bIsAudio = b.startsWith("A");
-    if (aIsAudio !== bIsAudio) return aIsAudio ? 1 : -1;
-    return a.localeCompare(b);
-  });
+  // 选中的 clip（snake_case 原始类型，给 InspectorPanel / PreviewPanel）
+  const selectedClip: ApiClip | null = useMemo(
+    () => clips.find(c => c.id === selectedClipId) ?? null,
+    [clips, selectedClipId],
+  );
+
+  // 按轨道分组（ClipData 给 TrackLane）
+  const tracks = useMemo(() => {
+    const m = new Map<string, ClipData[]>();
+    for (const item of clipDataItems) {
+      const list = m.get(item.track) ?? [];
+      list.push(item);
+      m.set(item.track, list);
+    }
+    return m;
+  }, [clipDataItems]);
+
+  const sortedTrackIds = useMemo(() =>
+    [...tracks.keys()].sort((a, b) => {
+      const aA = a.startsWith("A"), bA = b.startsWith("A");
+      if (aA !== bA) return aA ? 1 : -1;
+      return a.localeCompare(b);
+    }), [tracks]);
 
   const headerWidth = 80;
 
-  const handleSelectClip = (clip: ClipData) => {
-    setSelectedClip(prev => prev?.id === clip.id ? null : clip);
-  };
+  const handleSelectClip = useCallback((clip: ClipData) => {
+    setSelectedClipId(prev => prev === clip.id ? null : clip.id);
+  }, []);
+
+  const handleDeselect = useCallback(() => setSelectedClipId(null), []);
 
   const zoomIn = () => setZoomIdx(i => Math.min(i + 1, ZOOM_LEVELS.length - 1));
   const zoomOut = () => setZoomIdx(i => Math.max(i - 1, 0));
 
+  // ── 加载 / 错误 ──
+  if (error) return <div className="text-danger p-6">加载失败: {error}</div>;
+  if (loading) return <div className="text-text-dim p-6">加载中…</div>;
+
   return (
-    <div style={{ fontFamily: "system-ui", background: "#111", color: "#eee", minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+    <div className="flex flex-col h-screen bg-bg text-text font-sans">
       {/* ═══ 顶栏 ═══ */}
-      <div style={{ padding: "10px 16px", borderBottom: "1px solid #333", display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-        <button onClick={() => onBack ? onBack() : window.history.back()} style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 20 }}>←</button>
-        <span style={{ fontSize: 18, fontWeight: 600 }}>{projectName || projectId}</span>
-        <span style={{ color: "#666", fontSize: 13, marginLeft: 8 }}>
-          {fps}fps · {items.length} 片段 · {transitions.length} 转场 · {frameToTime(totalFrames, fps)}
+      <div className="px-4 py-2.5 border-b border-border flex items-center gap-3 shrink-0">
+        <button
+          onClick={() => onBack ? onBack() : window.history.back()}
+          className="text-text-dim hover:text-text text-xl bg-transparent border-none cursor-pointer"
+        >
+          ←
+        </button>
+        <span className="text-lg font-semibold">{projectName}</span>
+        <span className="text-text-dim text-[13px] ml-1">
+          {fps}fps · {clips.length} 片段 · {transitions.length} 转场 · {frameToTime(totalFrames, fps)}
         </span>
 
-        {/* 渲染按钮 */}
+        {/* 渲染按钮 → ExportDialog */}
         <button
-          onClick={() => setIsRendering(true)}
-          disabled={isRendering}
-          style={{
-            background: isRendering ? "#333" : "#3b82f6",
-            border: "none", color: isRendering ? "#666" : "#fff",
-            borderRadius: 6, padding: "6px 14px", fontSize: 13, fontWeight: 600,
-            cursor: isRendering ? "default" : "pointer",
-            marginLeft: 8, display: "flex", alignItems: "center", gap: 6,
-          }}
+          onClick={() => setExportOpen(true)}
+          className="ml-2 px-3.5 py-1.5 rounded-md text-[13px] font-semibold bg-accent text-on-accent hover:bg-accent-deep border-none cursor-pointer"
         >
-          {isRendering ? "⏳ 渲染中" : "🎬 渲染"}
+          🎬 渲染
         </button>
 
-        {/* 导出按钮 */}
+        {/* 导出 JSON */}
         <button
           onClick={() => {
-            const blob = new Blob([JSON.stringify({ projectId, projectName, fps, items, transitions }, null, 2)], { type: "application/json" });
+            const blob = new Blob([JSON.stringify({ projectId, projectName, fps, items: clipDataItems, transitions }, null, 2)], { type: "application/json" });
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
@@ -153,50 +161,36 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
             a.click();
             URL.revokeObjectURL(url);
           }}
-          style={{
-            background: "none", border: "1px solid #555", color: "#ccc",
-            borderRadius: 6, padding: "6px 14px", fontSize: 13, fontWeight: 600,
-            cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
-          }}
+          className="px-3.5 py-1.5 rounded-md text-[13px] font-semibold bg-transparent border border-border-light text-text-muted hover:text-text cursor-pointer"
         >
           📦 导出
         </button>
 
-        {/* 导入按钮 */}
-        <label
-          style={{
-            background: "none", border: "1px solid #555", color: "#ccc",
-            borderRadius: 6, padding: "6px 14px", fontSize: 13, fontWeight: 600,
-            cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
-          }}
-        >
+        {/* 导入 */}
+        <label className="px-3.5 py-1.5 rounded-md text-[13px] font-semibold bg-transparent border border-border-light text-text-muted hover:text-text cursor-pointer">
           📥 导入
           <input
             type="file"
             accept=".json"
-            style={{ display: "none" }}
+            className="hidden"
             onChange={async (e) => {
               const file = e.target.files?.[0];
               if (!file) return;
               try {
                 const text = await file.text();
                 const imported = JSON.parse(text);
-                const clips = imported.items ?? imported.clips ?? [];
-                for (const clip of clips) {
-                  await fetch(`/api/projects/${encodeURIComponent(projectId)}/clips`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      name: clip.name,
-                      kind: clip.kind ?? "video",
-                      track: clip.track ?? "V1",
-                      start_frame: clip.startFrame ?? 0,
-                      duration_frames: clip.durationInFrames ?? 60,
-                      src: clip.src ?? "",
-                    }),
+                const importedClips = imported.items ?? imported.clips ?? [];
+                for (const clip of importedClips) {
+                  await api.createClip(projectId, {
+                    name: clip.name,
+                    kind: clip.kind ?? "video",
+                    track: clip.track ?? "V1",
+                    start_frame: clip.startFrame ?? 0,
+                    duration_frames: clip.durationInFrames ?? 60,
+                    src: clip.src ?? "",
                   });
                 }
-                window.location.reload();
+                reloadClips();
               } catch (err) {
                 alert("导入失败: " + (err as Error).message);
               }
@@ -205,40 +199,56 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
         </label>
 
         {/* 缩放控制 */}
-        <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: "auto" }}>
-          <button onClick={zoomOut} disabled={zoomIdx === 0} style={{
-            background: "#222", border: "1px solid #444", color: zoomIdx === 0 ? "#555" : "#ccc",
-            borderRadius: 4, width: 26, height: 26, cursor: zoomIdx === 0 ? "default" : "pointer", fontSize: 14,
-          }}>−</button>
-          <span style={{ fontSize: 11, color: "#888", minWidth: 36, textAlign: "center" }}>
-            {pxPerFrame}px/f
-          </span>
-          <button onClick={zoomIn} disabled={zoomIdx === ZOOM_LEVELS.length - 1} style={{
-            background: "#222", border: "1px solid #444", color: zoomIdx === ZOOM_LEVELS.length - 1 ? "#555" : "#ccc",
-            borderRadius: 4, width: 26, height: 26, cursor: zoomIdx === ZOOM_LEVELS.length - 1 ? "default" : "pointer", fontSize: 14,
-          }}>+</button>
+        <div className="flex items-center gap-1 ml-auto">
+          <button onClick={zoomOut} disabled={zoomIdx === 0}
+            className="w-[26px] h-[26px] rounded bg-panel-alt border border-border-light text-text-muted disabled:text-text-dim disabled:cursor-default cursor-pointer text-sm">
+            −
+          </button>
+          <span className="text-[11px] text-text-dim min-w-9 text-center">{pxPerFrame}px/f</span>
+          <button onClick={zoomIn} disabled={zoomIdx === ZOOM_LEVELS.length - 1}
+            className="w-[26px] h-[26px] rounded bg-panel-alt border border-border-light text-text-muted disabled:text-text-dim disabled:cursor-default cursor-pointer text-sm">
+            +
+          </button>
         </div>
       </div>
 
-      {/* 渲染进度 */}
-      <RenderProgress
-        projectId={projectId}
-        active={isRendering}
-        onComplete={() => setIsRendering(false)}
-        onCancel={() => setIsRendering(false)}
-      />
-
-      {/* ═══ 主体 ═══ */}
-      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-        {/* 左侧面板：素材池 + 素材库 */}
+      {/* ═══ 中间区域 ═══ */}
+      <div className="flex flex-1 min-h-0">
+        {/* 左侧面板 */}
         <SidePanel
           projectId={projectId}
           onPreview={(media) => setSelectedMedia(media)}
         />
 
-        {/* ═══ 右侧：时间线区域 ═══ */}
-        <div style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
-          {/* 标尺 */}
+        {/* 预览区 */}
+        <PreviewPanel
+          clips={clips}
+          playhead={playhead}
+          fps={fps}
+          totalFrames={totalFrames}
+          selectedClip={selectedClip}
+          onSelectClip={(c) => setSelectedClipId(c?.id ?? null)}
+          onPlayheadChange={setPlayhead}
+        />
+
+        {/* 右侧属性面板 */}
+        <InspectorPanel
+          projectId={projectId}
+          clip={selectedClip}
+          fps={fps}
+          totalFrames={totalFrames}
+          clipCount={clips.length}
+          transitionCount={transitions.length}
+          projectName={projectName}
+          onClipUpdated={reloadClips}
+          onDeselect={handleDeselect}
+        />
+      </div>
+
+      {/* ═══ 底部时间线 ═══ */}
+      <div className="h-[220px] shrink-0 border-t border-border flex flex-col overflow-hidden">
+        {/* 标尺 */}
+        <div className="overflow-x-auto shrink-0">
           <Ruler
             totalFrames={totalFrames}
             fps={fps}
@@ -247,95 +257,64 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
             onSeek={setPlayhead}
             headerWidth={headerWidth}
           />
+        </div>
 
-          {/* 轨道列表 */}
-          <div style={{ padding: "4px 0", flex: 1 }}>
-            {sortedTrackIds.map(trackId => (
-              <TrackLane
-                key={trackId}
-                trackId={trackId}
-                clips={tracks.get(trackId) ?? []}
-                pxPerFrame={pxPerFrame}
-                totalFrames={totalFrames}
-                color={colorForTrack(trackId)}
-                selectedClipId={selectedClip?.id ?? null}
-                onSelectClip={handleSelectClip}
-                fps={fps}
-                headerWidth={headerWidth}
-              />
-            ))}
+        {/* 轨道列表 */}
+        <div className="flex-1 overflow-auto py-1">
+          {sortedTrackIds.map(trackId => (
+            <TrackLane
+              key={trackId}
+              trackId={trackId}
+              clips={tracks.get(trackId) ?? []}
+              pxPerFrame={pxPerFrame}
+              totalFrames={totalFrames}
+              color={colorForTrack(trackId)}
+              selectedClipId={selectedClipId}
+              onSelectClip={handleSelectClip}
+              fps={fps}
+              headerWidth={headerWidth}
+            />
+          ))}
+          {sortedTrackIds.length === 0 && (
+            <div className="p-6 text-text-dim text-[13px] text-center">暂无轨道数据</div>
+          )}
+        </div>
 
-            {sortedTrackIds.length === 0 && (
-              <div style={{ padding: 24, color: "#555", fontSize: 13, textAlign: "center" }}>
-                暂无轨道数据
-              </div>
-            )}
-          </div>
-
-          {/* 播放头控制条 */}
-          <div style={{ padding: "8px 16px", borderTop: "1px solid #2a2a2a", flexShrink: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <span style={{ fontSize: 12, color: "#ef4444", fontFamily: "monospace", minWidth: 60 }}>
-                {frameToTime(playhead, fps)}
-              </span>
-              <input type="range" min={0} max={totalFrames} value={playhead}
-                onChange={e => setPlayhead(Number(e.target.value))}
-                style={{ flex: 1, cursor: "pointer", accentColor: "#ef4444" }}
-              />
-              <span style={{ fontSize: 12, color: "#666", fontFamily: "monospace", minWidth: 60, textAlign: "right" }}>
-                {frameToTime(totalFrames, fps)}
-              </span>
-            </div>
+        {/* 播放头控制条 */}
+        <div className="px-4 py-2 border-t border-border shrink-0">
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-danger font-mono min-w-[60px]">
+              {frameToTime(playhead, fps)}
+            </span>
+            <input
+              type="range" min={0} max={totalFrames} value={playhead}
+              onChange={e => setPlayhead(Number(e.target.value))}
+              className="flex-1 cursor-pointer accent-danger"
+            />
+            <span className="text-xs text-text-dim font-mono min-w-[60px] text-right">
+              {frameToTime(totalFrames, fps)}
+            </span>
           </div>
         </div>
       </div>
 
-      {/* 选中片段信息浮层 */}
-      {selectedClip && (
-        <div style={{
-          position: "fixed", bottom: 16, right: 16, zIndex: 900,
-          background: "#1e1e1e", border: "1px solid #444", borderRadius: 8,
-          padding: 12, width: 220, boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
-        }}>
-          <div style={{ fontSize: 12, color: "#888", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
-            🎬 片段详情
-            <button onClick={() => setSelectedClip(null)}
-              style={{ marginLeft: "auto", background: "none", border: "none", color: "#666", cursor: "pointer", fontSize: 14 }}>
-              ✕
-            </button>
-          </div>
-          <div style={{ fontSize: 12 }}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>{selectedClip.name}</div>
-            <div style={{ color: "#888", lineHeight: 1.8 }}>
-              <div>轨道: <span style={{ color: colorForTrack(selectedClip.track) }}>{selectedClip.track}</span></div>
-              <div>类型: {selectedClip.kind}</div>
-              <div>起始: {frameToTime(selectedClip.startFrame, fps)} ({selectedClip.startFrame}f)</div>
-              <div>时长: {frameToTime(selectedClip.durationInFrames, fps)} ({selectedClip.durationInFrames}f)</div>
-              <div>结束: {frameToTime(selectedClip.startFrame + selectedClip.durationInFrames, fps)}</div>
-            </div>
-            {selectedClip.src && (
-              <button
-                onClick={() => setSelectedMedia({ src: selectedClip.src, kind: selectedClip.kind as "video" | "audio", name: selectedClip.name })}
-                style={{
-                  marginTop: 8, background: "#3b82f6", border: "none", color: "#fff",
-                  borderRadius: 4, padding: "4px 12px", fontSize: 11, cursor: "pointer",
-                }}
-              >
-                ▶ 预览
-              </button>
-            )}
-          </div>
-        </div>
+      {/* ═══ 弹层 ═══ */}
+
+      {/* ExportDialog */}
+      {exportOpen && (
+        <ExportDialog
+          projectId={projectId}
+          projectName={projectName}
+          onClose={() => setExportOpen(false)}
+        />
       )}
 
-      {/* MediaPlayer 弹层 */}
+      {/* MediaPlayer（仅用于 SidePanel 素材预览） */}
       {selectedMedia && (
-        <div style={{
-          position: "fixed", inset: 0, zIndex: 1000,
-          background: "rgba(0,0,0,0.85)", display: "flex",
-          alignItems: "center", justifyContent: "center",
-          padding: 24,
-        }} onClick={e => { if (e.target === e.currentTarget) setSelectedMedia(null); }}>
+        <div
+          className="fixed inset-0 z-[1000] bg-black/85 flex items-center justify-center p-6"
+          onClick={e => { if (e.target === e.currentTarget) setSelectedMedia(null); }}
+        >
           <MediaPlayer
             src={selectedMedia.src}
             kind={selectedMedia.kind}

@@ -1,4 +1,4 @@
-import { StrictMode, useState } from "react";
+import { StrictMode, Suspense, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import ProjectList from "./ProjectList";
@@ -17,10 +17,21 @@ function App() {
     }} />;
   }
 
-  return <TimelineViewer projectId={projectId} onBack={() => {
-    window.location.hash = "";
-    setProjectId("");
-  }} />;
+  return (
+    <Suspense fallback={
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "center",
+        height: "100vh", background: "#0f0f1a", color: "#8b95a5", fontSize: 14,
+      }}>
+        加载中…
+      </div>
+    }>
+      <TimelineViewer projectId={projectId} onBack={() => {
+        window.location.hash = "";
+        setProjectId("");
+      }} />
+    </Suspense>
+  );
 }
 
 createRoot(document.getElementById("root")!).render(
