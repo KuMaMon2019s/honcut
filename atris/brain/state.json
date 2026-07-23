@@ -1,0 +1,165 @@
+{
+  "generatedAt": "2026-07-23T09:34:55.543Z",
+  "root": "/Users/soda/Documents/honcut",
+  "name": "MAP.md — Honcut 代码导航地图",
+  "slug": "honcut",
+  "business": {},
+  "todo": {
+    "open": 0,
+    "checked": 0,
+    "titled": 0,
+    "done": 0
+  },
+  "endgame": null,
+  "taskProjection": null,
+  "hasNow": true,
+  "nowHeading": "now",
+  "hasMap": true,
+  "hasWikiStatus": true,
+  "mapLineCount": 308,
+  "wikiPages": [
+    "atris/wiki/STATUS.md",
+    "atris/wiki/index.md",
+    "atris/wiki/log.md",
+    "atris/wiki/wiki.md"
+  ],
+  "stateFiles": [
+    {
+      "path": "/Users/soda/Documents/honcut/.atris/state/events.jsonl",
+      "exists": false,
+      "rows": 0,
+      "validRows": 0,
+      "latestTs": null
+    },
+    {
+      "path": "/Users/soda/Documents/honcut/.atris/state/episodes.jsonl",
+      "exists": false,
+      "rows": 0,
+      "validRows": 0,
+      "latestTs": null
+    },
+    {
+      "path": "/Users/soda/Documents/honcut/.atris/state/task_episodes.jsonl",
+      "exists": false,
+      "rows": 0,
+      "validRows": 0,
+      "latestTs": null
+    },
+    {
+      "path": "/Users/soda/Documents/honcut/.atris/state/scorecards.jsonl",
+      "exists": false,
+      "rows": 0,
+      "validRows": 0,
+      "latestTs": null
+    },
+    {
+      "path": "/Users/soda/Documents/honcut/.atris/state/agent_tasks.jsonl",
+      "exists": false,
+      "rows": 0,
+      "validRows": 0,
+      "latestTs": null
+    },
+    {
+      "path": "/Users/soda/Documents/honcut/.atris/state/agent_mail.jsonl",
+      "exists": false,
+      "rows": 0,
+      "validRows": 0,
+      "latestTs": null
+    },
+    {
+      "path": "/Users/soda/Documents/honcut/.atris/state/agent_inboxes.jsonl",
+      "exists": false,
+      "rows": 0,
+      "validRows": 0,
+      "latestTs": null
+    },
+    {
+      "path": "/Users/soda/Documents/honcut/.atris/state/agents.jsonl",
+      "exists": false,
+      "rows": 0,
+      "validRows": 0,
+      "latestTs": null
+    },
+    {
+      "path": "/Users/soda/Documents/honcut/.atris/state/approvals.jsonl",
+      "exists": false,
+      "rows": 0,
+      "validRows": 0,
+      "latestTs": null
+    }
+  ],
+  "stateRoot": "/Users/soda/Documents/honcut",
+  "stateRoots": [
+    "/Users/soda/Documents/honcut"
+  ],
+  "loopHealth": [
+    {
+      "label": "Task plane",
+      "files": [
+        "task_events.jsonl",
+        "tasks.projection.json"
+      ],
+      "rows": 0,
+      "validRows": 0,
+      "latestTs": null,
+      "active": false
+    },
+    {
+      "label": "Career XP",
+      "files": [
+        "career_xp_receipts.jsonl",
+        "career_xp.projection.json",
+        "gm_xp.projection.json"
+      ],
+      "rows": 0,
+      "validRows": 0,
+      "latestTs": null,
+      "active": false
+    },
+    {
+      "label": "Master loop",
+      "files": [
+        "master_loop_events.jsonl"
+      ],
+      "rows": 0,
+      "validRows": 0,
+      "latestTs": null,
+      "active": false
+    },
+    {
+      "label": "Missions",
+      "files": [
+        "mission_events.jsonl",
+        "missions.jsonl"
+      ],
+      "rows": 0,
+      "validRows": 0,
+      "latestTs": null,
+      "active": false
+    },
+    {
+      "label": "Codex goal",
+      "files": [
+        "codex_goal.json"
+      ],
+      "rows": 0,
+      "validRows": 0,
+      "latestTs": null,
+      "active": false
+    },
+    {
+      "label": "Pulse AGI",
+      "files": [
+        "pulse_agi_loop_receipts.jsonl"
+      ],
+      "rows": 0,
+      "validRows": 0,
+      "latestTs": null,
+      "active": false
+    }
+  ],
+  "totalRows": 0,
+  "validRows": 0,
+  "latestScorecard": null,
+  "latestStateTs": null
+}

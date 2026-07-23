@@ -1,0 +1,8 @@
+node_modules/
+.honcut/
+dist/
+*.exe
+.env
+__pycache__/
+*.pyc
+.DS_Store
