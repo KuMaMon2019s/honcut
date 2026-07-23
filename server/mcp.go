@@ -1,11 +1,14 @@
 package honcutserver
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
+	"honcut-server/internal/generate"
+	"honcut-server/internal/kb"
 	"honcut-server/internal/render"
 
 	"github.com/google/uuid"
@@ -85,6 +88,10 @@ func (s *MCPServer) registerTools() {
 	s.tools["track_export"] = s.trackExport
 	s.tools["openchatcut_status"] = s.openchatcutStatus
 	s.tools["ToolSearch"] = s.toolSearch
+	// Generation mode: text-to-video & text-to-image via Ark Agent Plan
+	s.tools["generate_video"] = s.generateVideo
+	s.tools["generate_image"] = s.generateImage
+	s.tools["kb_search"] = s.kbSearch
 }
 
 // ListTools returns all available MCP tools
@@ -2223,4 +2230,76 @@ func (s *MCPServer) manageDesignStyle(params map[string]interface{}) (interface{
 	default:
 		return nil, fmt.Errorf("unknown action: %s", action)
 	}
+}
+
+// ─── Generation Mode: text-to-video & text-to-image ──────────────────
+
+var sharedArkClient = generate.NewArkClient()
+
+// generateVideo creates a video from text prompt using doubao-seedance-2.0
+func (s *MCPServer) generateVideo(params map[string]interface{}) (interface{}, error) {
+	prompt, ok := params["prompt"].(string)
+	if !ok || prompt == "" {
+		return nil, fmt.Errorf("prompt is required")
+	}
+	variant, _ := params["variant"].(string)
+	duration := 5
+	if v, ok := params["duration"].(float64); ok {
+		duration = int(v)
+	}
+	ratio, _ := params["aspect_ratio"].(string)
+	resolution, _ := params["resolution"].(string)
+	outputPath, _ := params["output_path"].(string)
+
+	seedance := generate.NewSeedance(sharedArkClient)
+	result := seedance.Generate(context.Background(), generate.SeedanceInput{
+		Prompt:      prompt,
+		Variant:     variant,
+		Duration:    duration,
+		AspectRatio: ratio,
+		Resolution:  resolution,
+		OutputPath:  outputPath,
+	})
+	return result, nil
+}
+
+// generateImage creates an image from text prompt using doubao-seedream-5.0-lite
+func (s *MCPServer) generateImage(params map[string]interface{}) (interface{}, error) {
+	prompt, ok := params["prompt"].(string)
+	if !ok || prompt == "" {
+		return nil, fmt.Errorf("prompt is required")
+	}
+	size, _ := params["size"].(string)
+	outputPath, _ := params["output_path"].(string)
+
+	seedream := generate.NewSeedream(sharedArkClient)
+	result := seedream.Generate(context.Background(), generate.SeedreamInput{
+		Prompt:     prompt,
+		Size:       size,
+		OutputPath: outputPath,
+	})
+	return result, nil
+}
+
+// kbSearch searches the knowledge base for assets matching a query
+func (s *MCPServer) kbSearch(params map[string]interface{}) (interface{}, error) {
+	query, ok := params["query"].(string)
+	if !ok || query == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+	limit := 5
+	if v, ok := params["limit"].(float64); ok {
+		limit = int(v)
+	}
+
+	qdrant := kb.NewQdrantClient()
+	results, err := qdrant.SemanticSearch(context.Background(), query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("kb search failed: %w", err)
+	}
+	return map[string]interface{}{
+		"success": true,
+		"count":   len(results),
+		"results": results,
+	}, nil
 }
