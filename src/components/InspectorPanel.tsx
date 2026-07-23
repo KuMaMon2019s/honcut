@@ -14,6 +14,7 @@ interface InspectorPanelProps {
   projectName: string;
   onClipUpdated?: () => void;
   onDeselect?: () => void;
+  width?: number;
 }
 
 function frameToTime(f: number, fps: number): string {
@@ -37,7 +38,7 @@ const inputCls = "bg-inset border border-border rounded px-2 py-1 text-xs text-t
 
 export default function InspectorPanel({
   projectId, clip, fps, totalFrames, clipCount, transitionCount, projectName,
-  onClipUpdated, onDeselect,
+  onClipUpdated, onDeselect, width = 280,
 }: InspectorPanelProps) {
   const [name, setName] = useState("");
   const [startFrame, setStartFrame] = useState(0);
@@ -99,7 +100,7 @@ export default function InspectorPanel({
   // ── 无选中 → 项目概览 ──
   if (!clip) {
     return (
-      <div className="w-[280px] shrink-0 border-l border-border bg-panel flex flex-col overflow-y-auto">
+      <div style={{ width }} className="shrink-0 border-l border-border bg-panel flex flex-col overflow-y-auto">
         <div className="px-4 py-3 border-b border-border text-xs font-semibold text-text-dim uppercase tracking-wider">
           项目信息
         </div>
@@ -132,7 +133,7 @@ export default function InspectorPanel({
   const dotCls = TRACK_DOT[clip.track] ?? "bg-text-dim";
 
   return (
-    <div className="w-[280px] shrink-0 border-l border-border bg-panel flex flex-col overflow-y-auto">
+    <div style={{ width }} className="shrink-0 border-l border-border bg-panel flex flex-col overflow-y-auto">
       {/* 标题栏 */}
       <div className="px-4 py-3 border-b border-border flex items-center gap-2">
         <span className="text-sm font-semibold text-text truncate flex-1">{clip.name}</span>

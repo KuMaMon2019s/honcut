@@ -13,6 +13,7 @@ interface SidebarProps {
   selectedClip: ClipData | null;
   onClipUpdated: () => void;
   onPreview: (media: { src: string; kind: "video" | "audio"; name: string }) => void;
+  width?: number;
 }
 
 const TABS: { id: TabId; icon: string; label: string }[] = [
@@ -20,13 +21,13 @@ const TABS: { id: TabId; icon: string; label: string }[] = [
   { id: "library", icon: "🎛️", label: "素材库" },
 ];
 
-export default function Sidebar({ projectId, selectedClip, onClipUpdated, onPreview }: SidebarProps) {
+export default function Sidebar({ projectId, selectedClip, onClipUpdated, onPreview, width = 260 }: SidebarProps) {
   const [tab, setTab] = useState<TabId>("pool");
 
   return (
     <div
       style={{
-        width: 260,
+        width,
         flexShrink: 0,
         display: "flex",
         flexDirection: "column",
