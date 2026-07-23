@@ -17,8 +17,11 @@ Honcut 是一个**可被 AI 智能体驱动的视频剪辑引擎**。它提供�
 ## 快速开始
 
 ```bash
-# 启动后端 (Go)
-cd server && go run ./cmd/honcut-server
+# 编译（一键生成 honcut-server + honcut-mcp 二进制）
+make build
+
+# 启动后端
+make run-server
 # → http://localhost:8080
 
 # 健康检查
@@ -38,6 +41,112 @@ curl -X POST http://localhost:8080/api/projects/my-video/clips \
 # 列出时间线
 curl http://localhost:8080/api/projects/my-video/clips
 ```
+
+### Makefile 命令
+
+| 命令 | 说明 |
+|------|------|
+| `make build` | 编译 honcut-server + honcut-mcp |
+| `make test` | 运行全部 Go 测试 |
+| `make run-server` | 编译并启动 HTTP 服务 |
+| `make verify-mcp` | 编译 MCP 并列出所有注册工具 |
+| `make health` | 检查服务器健康状态 |
+| `make clean` | 清理编译产物 |
+
+## MCP 使用指南
+
+Honcut 的 MCP Server 采用 **stdio 传输**——AI 客户端通过标准输入/输出与 `honcut-mcp` 二进制通信，无需 HTTP 端口。
+
+### 编译 MCP 二进制
+
+```bash
+make build-mcp
+# → server/honcut-mcp
+```
+
+### 客户端配置
+
+#### Claude Desktop / Claude Code
+
+在 `claude_desktop_config.json`（或 `.claude/settings.json`）中添加：
+
+```json
+{
+  "mcpServers": {
+    "honcut": {
+      "command": "/path/to/honcut/server/honcut-mcp",
+      "env": {
+        "HONCUT_DB_PATH": "~/.honcut/honcut.db"
+      }
+    }
+  }
+}
+```
+
+#### Hermes Agent
+
+在 `config.yaml` 中添加：
+
+```yaml
+mcp_servers:
+  honcut:
+    command: /path/to/honcut/server/honcut-mcp
+    env:
+      HONCUT_DB_PATH: ~/.honcut/honcut.db
+```
+
+#### 通用 MCP 客户端（stdio）
+
+任何支持 MCP stdio 传输的客户端，只需将 `honcut-mcp` 配置为子进程：
+
+```json
+{
+  "command": "/path/to/honcut/server/honcut-mcp",
+  "args": [],
+  "env": {}
+}
+```
+
+### 命令行测试
+
+```bash
+# 列出所有工具
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
+  | ./server/honcut-mcp 2>/dev/null | python3 -m json.tool
+
+# 调用工具：读取时间线
+echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_timeline","arguments":{"project_id":"my-video"}}}' \
+  | ./server/honcut-mcp 2>/dev/null | python3 -m json.tool
+
+# 调用工具：搜索工具
+echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ToolSearch","arguments":{"query":"clip"}}}' \
+  | ./server/honcut-mcp 2>/dev/null | python3 -m json.tool
+
+# 快捷验证（make 目标）
+make verify-mcp
+```
+
+### 工作原理
+
+```
+AI 客户端 (Claude/Hermes/etc.)
+    │
+    │  stdin: JSON-RPC 2.0 请求
+    ▼
+honcut-mcp (stdio 二进制)
+    │
+    │  SQLite 读写
+    ▼
+~/.honcut/honcut.db
+    │
+    │  REST API 共享同一数据库
+    ▼
+honcut-server (HTTP :8080)
+```
+
+- `honcut-mcp` 和 `honcut-server` 共享同一个 SQLite 数据库（WAL 模式支持并发读写）
+- MCP 工具直接操作 Store 层，与 REST API 操作同一份数据
+- 无需启动 HTTP 服务器即可使用 MCP 工具
 
 ## 技术栈
 

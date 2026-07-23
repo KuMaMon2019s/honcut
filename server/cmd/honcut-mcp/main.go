@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 
 	honcutserver "honcut-server"
+	"honcut-server/internal/render"
 )
 
 func main() {
@@ -29,8 +31,18 @@ func main() {
 	}
 	defer store.Close()
 
+	// Initialize render pipeline (needed for render-related MCP tools)
+	outputDir := filepath.Join(filepath.Dir(dbPath), "renders")
+	storeReader := &honcutserver.StoreTimelineReader{Store: store}
+	pipeline := &render.Pipeline{
+		Store:     storeReader,
+		OutputDir: outputDir,
+		FPS:       render.FPS,
+	}
+	renderManager := render.NewProgressManager(pipeline)
+
 	// Create MCP server
-	mcpServer := honcutserver.NewMCPServer(store)
+	mcpServer := honcutserver.NewMCPServer(store, renderManager)
 
 	// Stdio transport
 	scanner := bufio.NewScanner(os.Stdin)
@@ -58,6 +70,23 @@ func main() {
 		// Handle MCP methods
 		switch method {
 		case "initialize":
+			// Register this editor session
+			editorInfo := map[string]interface{}{
+				"name":      "unknown",
+				"connected": true,
+			}
+			if params != nil {
+				if ci, ok := params["clientInfo"].(map[string]interface{}); ok {
+					if n, ok := ci["name"].(string); ok {
+						editorInfo["name"] = n
+					}
+					if v, ok := ci["version"].(string); ok {
+						editorInfo["version"] = v
+					}
+				}
+			}
+			mcpServer.RegisterEditor(editorInfo)
+
 			sendResponse(writer, id, map[string]interface{}{
 				"protocolVersion": "2024-11-05",
 				"capabilities": map[string]interface{}{

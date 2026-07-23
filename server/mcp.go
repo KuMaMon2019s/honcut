@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"honcut-server/internal/render"
+
 	"github.com/google/uuid"
 )
 
@@ -17,18 +19,26 @@ type MCPTool struct {
 
 // MCPServer handles MCP tool registration and execution
 type MCPServer struct {
-	store *Store
-	tools map[string]func(map[string]interface{}) (interface{}, error)
+	store   *Store
+	pm      *render.ProgressManager
+	tools   map[string]func(map[string]interface{}) (interface{}, error)
+	editors []map[string]interface{} // connected editor sessions
 }
 
 // NewMCPServer creates a new MCP server with the given store
-func NewMCPServer(store *Store) *MCPServer {
+func NewMCPServer(store *Store, pm *render.ProgressManager) *MCPServer {
 	server := &MCPServer{
 		store: store,
+		pm:    pm,
 		tools: make(map[string]func(map[string]interface{}) (interface{}, error)),
 	}
 	server.registerTools()
 	return server
+}
+
+// RegisterEditor records a connected editor session (called on MCP initialize)
+func (s *MCPServer) RegisterEditor(info map[string]interface{}) {
+	s.editors = append(s.editors, info)
 }
 
 // registerTools registers all available MCP tools
@@ -1649,11 +1659,18 @@ func (s *MCPServer) openchatcutStatus(params map[string]interface{}) (interface{
 	// Count total tools
 	toolCount := len(s.tools)
 
+	// Build editors list (ensure non-nil for clean JSON)
+	editors := s.editors
+	if editors == nil {
+		editors = []map[string]interface{}{}
+	}
+
 	return map[string]interface{}{
 		"success":       true,
 		"status":        "online",
 		"tool_count":    toolCount,
 		"project_count": len(projects),
+		"editors":       editors,
 		"message":       "Honcut MCP server is running",
 	}, nil
 }

@@ -94,7 +94,7 @@ func TestBatchA_StoreMethods(t *testing.T) {
 func TestBatchA_MCPTools(t *testing.T) {
 	store := setupTestDB(t)
 	defer store.Close()
-	mcp := NewMCPServer(store)
+	mcp := NewMCPServer(store, nil)
 
 	// 1. list_projects (empty)
 	res, err := mcp.ExecuteTool("list_projects", map[string]interface{}{})

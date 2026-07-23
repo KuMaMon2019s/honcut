@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+
 	"github.com/google/uuid"
 )
 
@@ -29,7 +30,6 @@ import (
 //	POST   /api/upload                          — upload media
 func APIHandler(store *Store) http.Handler {
 	mux := http.NewServeMux()
-
 	// Project collection — POST create, GET list
 	mux.HandleFunc("POST /api/projects", func(w http.ResponseWriter, r *http.Request) {
 		createProject(w, r, store)
@@ -1164,3 +1164,5 @@ func statusAPI(w http.ResponseWriter, r *http.Request, store *Store) {
 		"message":       "Honcut server is running",
 	})
 }
+
+
