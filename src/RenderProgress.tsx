@@ -2,13 +2,13 @@
 // 轮询后端 API，展示实时进度、已用时间、预估剩余、取消按钮
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { api, type RenderStatus as ApiRenderStatus } from "./api/client";
 
-interface RenderStatus {
-  projectId: string;
+interface RenderDisplay {
   status: "preparing" | "rendering" | "complete" | "error" | "cancelled";
-  progress: number;     // 0–100
-  elapsed: string;      // "m:ss"
-  eta: string;          // "m:ss" or "--:--"
+  progress: number;
+  elapsed: string;
+  eta: string;
   elapsedMs: number;
   currentFrame: number;
   totalFrames: number;
@@ -19,7 +19,7 @@ interface RenderStatus {
 
 interface Props {
   projectId: string;
-  active: boolean;                // 是否正在渲染（由父组件控制）
+  active: boolean;
   onComplete?: () => void;
   onCancel?: () => void;
   onStart?: () => void;
@@ -41,28 +41,42 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: "#6b7280",
 };
 
+function mapApiStatus(s: ApiRenderStatus): RenderDisplay {
+  const status = (s.status ?? "preparing") as RenderDisplay["status"];
+  return {
+    status,
+    progress: s.progress ?? 0,
+    elapsed: "0:00",
+    eta: "--:--",
+    elapsedMs: 0,
+    currentFrame: 0,
+    totalFrames: 0,
+    fps: 24,
+    outputPath: s.output_path || undefined,
+    error: s.error || undefined,
+  };
+}
+
 export default function RenderProgress({ projectId, active, onComplete, onCancel, onStart }: Props) {
-  const [status, setStatus] = useState<RenderStatus | null>(null);
+  const [display, setDisplay] = useState<RenderDisplay | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
   const [elapsedDisplay, setElapsedDisplay] = useState("0:00");
   const startTimeRef = useRef<number>(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // 发起渲染
+  // 发起渲染 — jobId 在 URL，project_id 在 JSON body
   const startRender = useCallback(async () => {
     onStart?.();
+    const id = `render-${projectId}-${Date.now()}`;
+    setJobId(id);
     try {
-      const res = await fetch(`/api/render/${encodeURIComponent(projectId)}`, { method: "POST" });
-      const data = await res.json();
-      if (res.ok) {
-        setStatus(data);
-        setPolling(true);
-      } else {
-        setStatus({ ...data, status: "error", error: data.error ?? "启动失败" });
-      }
-    } catch (err: any) {
-      setStatus({
-        projectId,
+      const data = await api.startRender(id, projectId);
+      setDisplay(mapApiStatus(data));
+      setPolling(true);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setDisplay({
         status: "error",
         progress: 0,
         elapsed: "0:00",
@@ -71,49 +85,45 @@ export default function RenderProgress({ projectId, active, onComplete, onCancel
         currentFrame: 0,
         totalFrames: 0,
         fps: 24,
-        error: err.message,
+        error: msg,
       });
     }
   }, [projectId, onStart]);
 
-  // 轮询进度
+  // 轮询进度 — 使用 jobId
   useEffect(() => {
-    if (!polling || !projectId) return;
+    if (!polling || !jobId) return;
 
     const poll = async () => {
       try {
-        const res = await fetch(`/api/render/${encodeURIComponent(projectId)}/status`);
-        const data: RenderStatus = await res.json();
-        setStatus(data);
+        const data = await api.getRenderStatus(jobId);
+        const mapped = mapApiStatus(data);
+        setDisplay(mapped);
 
-        if (data.status === "complete" || data.status === "error" || data.status === "cancelled") {
+        if (mapped.status === "complete" || mapped.status === "error" || mapped.status === "cancelled") {
           setPolling(false);
-          if (data.status === "complete") onComplete?.();
+          if (mapped.status === "complete") onComplete?.();
         }
       } catch {
         // 网络错误，继续重试
       }
     };
 
-    // 立即查询一次
     poll();
-
-    // 每秒轮询
     const id = setInterval(poll, 1000);
     intervalRef.current = id;
     return () => clearInterval(id);
-  }, [polling, projectId, onComplete]);
+  }, [polling, jobId, onComplete]);
 
   // 已用时间实时更新
   useEffect(() => {
-    if (!status || (status.status !== "rendering" && status.status !== "preparing")) {
-      setElapsedDisplay(status?.elapsed ?? "0:00");
+    if (!display || (display.status !== "rendering" && display.status !== "preparing")) {
+      setElapsedDisplay(display?.elapsed ?? "0:00");
       return;
     }
 
-    // 记录开始时间（基于后端返回的 elapsedMs 倒推）
-    if (startTimeRef.current === 0 && status.elapsedMs > 0) {
-      startTimeRef.current = Date.now() - status.elapsedMs;
+    if (startTimeRef.current === 0 && display.elapsedMs > 0) {
+      startTimeRef.current = Date.now() - display.elapsedMs;
     }
 
     const updateElapsed = () => {
@@ -128,12 +138,13 @@ export default function RenderProgress({ projectId, active, onComplete, onCancel
     updateElapsed();
     const id = setInterval(updateElapsed, 1000);
     return () => clearInterval(id);
-  }, [status?.status, status?.elapsedMs]);
+  }, [display?.status, display?.elapsedMs]);
 
-  // 取消渲染
+  // 取消渲染 — 使用 jobId
   const cancelRender = async () => {
+    if (!jobId) return;
     try {
-      await fetch(`/api/render/${encodeURIComponent(projectId)}/cancel`, { method: "POST" });
+      await api.cancelRender(jobId);
       onCancel?.();
     } catch {
       // 尽力而为
@@ -142,16 +153,15 @@ export default function RenderProgress({ projectId, active, onComplete, onCancel
 
   // 初始化：如果 active 且未开始，自动开始
   useEffect(() => {
-    if (active && !status && !polling) {
+    if (active && !display && !polling) {
       startRender();
     }
-  }, [active, status, polling, startRender]);
+  }, [active, display, polling, startRender]);
 
-  // 不活跃时不渲染
-  if (!active && !status) return null;
+  if (!active && !display) return null;
 
-  const currentStatus = status?.status ?? "preparing";
-  const progress = status?.progress ?? 0;
+  const currentStatus = display?.status ?? "preparing";
+  const progress = display?.progress ?? 0;
   const color = STATUS_COLORS[currentStatus] ?? "#6b7280";
   const label = STATUS_LABELS[currentStatus] ?? currentStatus;
 
@@ -213,12 +223,12 @@ export default function RenderProgress({ projectId, active, onComplete, onCancel
         <div style={{ display: "flex", gap: 16, fontSize: 12, color: "#888" }}>
           {currentStatus === "rendering" && (
             <>
-              <span>帧 {status?.currentFrame ?? 0}/{status?.totalFrames ?? 0}</span>
-              <span>{status?.fps ?? 24} fps</span>
+              <span>帧 {display?.currentFrame ?? 0}/{display?.totalFrames ?? 0}</span>
+              <span>{display?.fps ?? 24} fps</span>
             </>
           )}
           <span>⏱ {elapsedDisplay}</span>
-          {currentStatus === "rendering" && <span>⏳ {status?.eta ?? "--:--"}</span>}
+          {currentStatus === "rendering" && <span>⏳ {display?.eta ?? "--:--"}</span>}
         </div>
 
         <div style={{ display: "flex", gap: 8 }}>
@@ -248,10 +258,10 @@ export default function RenderProgress({ projectId, active, onComplete, onCancel
             </button>
           )}
 
-          {/* 完成 → 下载 */}
-          {currentStatus === "complete" && status?.outputPath && (
+          {/* 完成 → 下载（使用 jobId） */}
+          {currentStatus === "complete" && jobId && (
             <a
-              href={`/api/render/${encodeURIComponent(projectId)}/download`}
+              href={api.getRenderDownloadUrl(jobId)}
               style={{
                 background: "#22c55e",
                 border: "none",
@@ -290,7 +300,7 @@ export default function RenderProgress({ projectId, active, onComplete, onCancel
           {/* 关闭按钮（完成/错误/取消后） */}
           {(currentStatus === "complete" || currentStatus === "error" || currentStatus === "cancelled") && (
             <button
-              onClick={() => { setStatus(null); setPolling(false); }}
+              onClick={() => { setDisplay(null); setPolling(false); setJobId(null); startTimeRef.current = 0; }}
               style={{
                 background: "none",
                 border: "1px solid #555",
@@ -308,9 +318,9 @@ export default function RenderProgress({ projectId, active, onComplete, onCancel
       </div>
 
       {/* 错误信息 */}
-      {currentStatus === "error" && status?.error && (
+      {currentStatus === "error" && display?.error && (
         <div style={{ marginTop: 8, fontSize: 11, color: "#ef4444", background: "#1f1111", padding: "6px 10px", borderRadius: 6 }}>
-          {status.error}
+          {display.error}
         </div>
       )}
 

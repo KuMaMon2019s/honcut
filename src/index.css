@@ -1,0 +1,136 @@
+@import "tailwindcss";
+
+/*
+ * honcut 主题 — 复制自 OpenChatCut 石墨(Graphite)皮肤
+ * 源: /Users/soda/projects/OpenChatCut/src/skins.ts
+ *
+ * :root 定义 --cc-* CSS 变量(真值),
+ * @theme inline 把它们映射为 Tailwind 工具类(bg-panel, text-dim, border-light …)
+ */
+
+:root {
+  /* 表面层级 */
+  --cc-bg: #101010;
+  --cc-inset: #141414;
+  --cc-panel: #181818;
+  --cc-panel-alt: #212121;
+  --cc-hover: #2c2c2c;
+
+  /* 边框 */
+  --cc-border: #363636;
+  --cc-border-light: #4a4a4a;
+
+  /* 文本 */
+  --cc-text: #e2e2e2;
+  --cc-text-muted: #b0b0b0;
+  --cc-text-dim: #808080;
+  --cc-text-strong: #ffffff;
+
+  /* 强调色 */
+  --cc-accent: #dc7036;
+  --cc-accent-deep: #c45c26;
+  --cc-accent-rgb: 220, 112, 54;
+  --cc-on-accent: #ffffff;
+
+  /* 墨水 / 阴影 (裸 R,G,B 供 rgba() 用) */
+  --cc-ink-rgb: 255, 255, 255;
+  --cc-shadow-rgb: 0, 0, 0;
+
+  --cc-color-scheme: dark;
+
+  /* 语义色 */
+  --cc-gold: #e6ac42;
+  --cc-select: #3b82f6;
+  --cc-success: #3fae6a;
+  --cc-danger: #e06c60;
+
+  /* 时间线表面 */
+  --cc-tl-track: #25262b;
+  --cc-tl-side-panel: #202126;
+
+  /* 轨道头芯片 */
+  --cc-track-video: #3b4bd8;
+  --cc-track-audio-a1: #e8993f;
+  --cc-track-audio-a2: #3fae6a;
+
+  /* 片段填充 */
+  --cc-clip-video: #2d7fb5;
+  --cc-clip-audio: #2f9e5a;
+  --cc-clip-mg: #c14d86;
+  --cc-clip-text: #c8912f;
+}
+
+/* Tailwind v4 主题映射 — 工具类直接引用 CSS 变量 */
+@theme inline {
+  /* 表面 */
+  --color-bg: var(--cc-bg);
+  --color-inset: var(--cc-inset);
+  --color-panel: var(--cc-panel);
+  --color-panel-alt: var(--cc-panel-alt);
+  --color-hover: var(--cc-hover);
+
+  /* 边框 */
+  --color-border: var(--cc-border);
+  --color-border-light: var(--cc-border-light);
+
+  /* 文本 */
+  --color-text: var(--cc-text);
+  --color-text-muted: var(--cc-text-muted);
+  --color-text-dim: var(--cc-text-dim);
+  --color-text-strong: var(--cc-text-strong);
+
+  /* 强调 */
+  --color-accent: var(--cc-accent);
+  --color-accent-deep: var(--cc-accent-deep);
+  --color-on-accent: var(--cc-on-accent);
+
+  /* 语义 */
+  --color-gold: var(--cc-gold);
+  --color-select: var(--cc-select);
+  --color-success: var(--cc-success);
+  --color-danger: var(--cc-danger);
+
+  /* 时间线 */
+  --color-tl-track: var(--cc-tl-track);
+  --color-tl-side-panel: var(--cc-tl-side-panel);
+
+  /* 轨道 */
+  --color-track-video: var(--cc-track-video);
+  --color-track-audio-a1: var(--cc-track-audio-a1);
+  --color-track-audio-a2: var(--cc-track-audio-a2);
+
+  /* 片段 */
+  --color-clip-video: var(--cc-clip-video);
+  --color-clip-audio: var(--cc-clip-audio);
+  --color-clip-mg: var(--cc-clip-mg);
+  --color-clip-text: var(--cc-clip-text);
+}
+
+/* 全局基础 */
+body {
+  background: var(--cc-bg);
+  color: var(--cc-text);
+  color-scheme: var(--cc-color-scheme);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* 滚动条 — 与 OpenChatCut 一致 */
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: rgba(var(--cc-ink-rgb), 0.14);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(var(--cc-ink-rgb), 0.32);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--cc-ink-rgb), 0.18) transparent;
+}
+
+/* focus 可见性 */
+:focus-visible {
+  outline: 2px solid var(--cc-accent);
+  outline-offset: 1px;
+}

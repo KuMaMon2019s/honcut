@@ -132,11 +132,19 @@ func APIHandler(store *Store, pm *render.ProgressManager, outputDir string) http
 		deleteDesignStyle(w, r, store, r.PathValue("id"), r.PathValue("style_id"))
 	})
 
+	mux.HandleFunc("GET /api/projects/{id}/assets", func(w http.ResponseWriter, r *http.Request) {
+		listAssets(w, r, store, r.PathValue("id"))
+	})
 	mux.HandleFunc("DELETE /api/projects/{id}/assets/{asset_id}", func(w http.ResponseWriter, r *http.Request) {
 		deleteAsset(w, r, store, r.PathValue("id"), r.PathValue("asset_id"))
 	})
 	mux.HandleFunc("PATCH /api/projects/{id}/assets/{asset_id}", func(w http.ResponseWriter, r *http.Request) {
 		renameAsset(w, r, store, r.PathValue("id"), r.PathValue("asset_id"))
+	})
+
+	// Library (effects / transitions / zoom presets / sounds)
+	mux.HandleFunc("GET /api/library", func(w http.ResponseWriter, r *http.Request) {
+		libraryAPI(w, r)
 	})
 
 	// Batch C: Templates, Script, Status
@@ -1102,6 +1110,16 @@ func deleteDesignStyle(w http.ResponseWriter, r *http.Request, store *Store, pro
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func listAssets(w http.ResponseWriter, r *http.Request, store *Store, projectID string) {
+	assets, err := store.ListAssets(projectID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(assets)
+}
+
 func deleteAsset(w http.ResponseWriter, r *http.Request, store *Store, projectID, assetID string) {
 	deleted, err := store.DeleteAsset(assetID)
 	if err != nil {
@@ -1143,6 +1161,29 @@ func renameAsset(w http.ResponseWriter, r *http.Request, store *Store, projectID
 }
 
 // ── Batch C: Templates, Script, Status REST handlers ─────────────────────────────────────
+
+// libraryAPI returns the built-in library catalog (effects, transitions, zoom presets, sounds).
+// Optional ?type=effects|transitions|zoom|sounds filter.
+func libraryAPI(w http.ResponseWriter, r *http.Request) {
+	libType := r.URL.Query().Get("type")
+
+	result := map[string]interface{}{}
+	if libType == "" || libType == "effects" || libType == "all" {
+		result["effects"] = []string{"Blur", "Sharpen", "Vignette", "Chromatic Aberration", "Glow", "Noise"}
+	}
+	if libType == "" || libType == "transitions" || libType == "all" {
+		result["transitions"] = []string{"Dissolve", "Wipe", "Fade", "Slide", "Zoom Blur"}
+	}
+	if libType == "" || libType == "zoom" || libType == "all" {
+		result["zoom"] = []string{"Ken Burns Slow", "Dynamic Zoom In", "Smooth Pan"}
+	}
+	if libType == "" || libType == "sounds" || libType == "all" {
+		result["sounds"] = []string{"Whoosh", "Click", "Pop", "Swoosh", "Bell", "Chime"}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
 
 func listTemplatesAPI(w http.ResponseWriter, r *http.Request) {
 	category := r.URL.Query().Get("category")

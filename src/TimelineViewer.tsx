@@ -1,44 +1,29 @@
-// TimelineViewer.tsx — 轻量时间线查看器
-// 读 OpenChatCut project.json → 渲染时间线 + 素材库 + KB 搜索
-// 零 Remotion / Chrome headless / ffmpeg 依赖
+// TimelineViewer.tsx — 时间线查看器（重构版）
+// 集成 Ruler + TrackLane + ClipBlock 三组件
+// 左侧面板：SidePanel（素材池 + 素材库）
+// 支持缩放、播放头定位、片段选中
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect } from "react";
 import RenderProgress from "./RenderProgress";
 import MediaPlayer from "./components/MediaPlayer";
-
-interface Clip {
-  id: string; name: string; kind: string;
-  track: string; startFrame: number; durationInFrames: number;
-  src: string;
-}
+import SidePanel from "./components/SidePanel";
+import Ruler from "./components/Ruler";
+import TrackLane from "./components/TrackLane";
+import { type ClipData } from "./components/ClipBlock";
 
 interface Transition {
   id: string; fromItemId: string; toItemId: string;
   type: string; durationInFrames: number;
 }
 
-interface Asset {
-  id: string; name: string; kind: string; src: string; durationInFrames?: number;
-}
-
 interface TimelineData {
-  fps: number; items: Clip[]; transitions: Transition[];
+  fps: number; items: ClipData[]; transitions: Transition[];
 }
 
-interface KbResult {
-  score: number;
-  filename: string;
-  type: string;
-  path: string;
-  abs_path: string;
-  description?: string;
-  tags?: string[];
-}
-
-// 颜色：不同轨道分配不同色系
+// 轨道颜色
 const TRACK_COLORS: Record<string, string> = {
-  V1: "#3b82f6", V2: "#22c55e", V3: "#f59e0b",
-  A1: "#8b5cf6", A2: "#ec4899",
+  V1: "#3b82f6", V2: "#22c55e", V3: "#f59e0b", V4: "#06b6d4",
+  A1: "#8b5cf6", A2: "#ec4899", A3: "#f97316",
 };
 
 function colorForTrack(track: string): string {
@@ -52,42 +37,34 @@ function frameToTime(f: number, fps: number): string {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
-const TYPE_LABELS: Record<string, { label: string; color: string }> = {
-  character: { label: "角色", color: "#8b5cf6" },
-  scene: { label: "场景", color: "#22c55e" },
-  style: { label: "风格", color: "#f59e0b" },
-  audio: { label: "音频", color: "#ec4899" },
-};
+// 缩放级别 → pxPerFrame
+const ZOOM_LEVELS = [1, 2, 3, 5, 8, 12];
+const DEFAULT_ZOOM_IDX = 2; // pxPerFrame = 3
 
-export default function TimelineViewer({ projectId }: { projectId: string }) {
+export default function TimelineViewer({ projectId, onBack }: { projectId: string; onBack?: () => void }) {
   const [data, setData] = useState<TimelineData | null>(null);
-  const [assets, setAssets] = useState<Asset[]>([]);
   const [error, setError] = useState("");
   const [playhead, setPlayhead] = useState(0);
+  const [selectedClip, setSelectedClip] = useState<ClipData | null>(null);
   const [selectedMedia, setSelectedMedia] = useState<{ src: string; kind: "video" | "audio"; name: string } | null>(null);
   const [isRendering, setIsRendering] = useState(false);
+  const [zoomIdx, setZoomIdx] = useState(DEFAULT_ZOOM_IDX);
+  const [projectName, setProjectName] = useState("");
 
-  // KB 搜索状态
-  const [kbQuery, setKbQuery] = useState("");
-  const [kbResults, setKbResults] = useState<KbResult[]>([]);
-  const [kbLoading, setKbLoading] = useState(false);
-  const [kbOpen, setKbOpen] = useState(false);
-  const [kbSelected, setKbSelected] = useState<KbResult | null>(null);
-  const [kbDetail, setKbDetail] = useState<Record<string, any> | null>(null);
-  const kbRef = useRef<HTMLDivElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const pxPerFrame = ZOOM_LEVELS[zoomIdx];
 
   useEffect(() => {
-    // Load project info + timeline clips from honcut API
     Promise.all([
       fetch(`/api/projects/${encodeURIComponent(projectId)}`).then(r => r.json()),
       fetch(`/api/projects/${encodeURIComponent(projectId)}/clips`).then(r => r.json()),
-      fetch(`/api/projects/${encodeURIComponent(projectId)}/transitions`).then(r => r.json()),
+      fetch(`/api/projects/${encodeURIComponent(projectId)}/transitions`).then(r => r.ok ? r.json() : []).catch(() => []),
+      fetch(`/api/projects/${encodeURIComponent(projectId)}/timelines`).then(r => r.json()).catch(() => []),
     ])
-      .then(([project, clips, transitions]) => {
-        const items = Array.isArray(clips) ? clips.map((c: any) => ({
+      .then(([project, clips, transitions, timelines]) => {
+        setProjectName(project.name || projectId);
+        const items: ClipData[] = Array.isArray(clips) ? clips.map((c: any) => ({
           id: c.id,
-          name: c.name || c.id?.slice(0,8),
+          name: c.name || c.id?.slice(0, 8),
           kind: c.kind || "video",
           track: c.track || "V1",
           startFrame: c.start_frame || 0,
@@ -96,95 +73,56 @@ export default function TimelineViewer({ projectId }: { projectId: string }) {
           props: typeof c.props === "string" ? JSON.parse(c.props || "{}") : (c.props || {}),
         })) : [];
         const trans = Array.isArray(transitions) ? transitions : [];
-        setData({ fps: 24, items, transitions: trans.map((t: any) => ({
-          id: t.id, fromItemId: t.from_item_id, toItemId: t.to_item_id,
-          type: t.type, durationInFrames: t.duration_frames,
-        })) });
-        setAssets([]);
+        const tlFps = Array.isArray(timelines) && timelines.length > 0 && timelines[0].fps ? timelines[0].fps : 24;
+        setData({
+          fps: tlFps,
+          items,
+          transitions: trans.map((t: any) => ({
+            id: t.id, fromItemId: t.from_item_id, toItemId: t.to_item_id,
+            type: t.type, durationInFrames: t.duration_frames,
+          })),
+        });
       })
       .catch(e => setError("加载失败: " + e.message));
   }, [projectId]);
 
-  // KB 搜索 — via honcut MCP
-  const doSearch = useCallback(async (q: string) => {
-    if (q.trim().length < 1) { setKbResults([]); setKbOpen(false); return; }
-    setKbLoading(true);
-    try {
-      const r = await fetch("/api/mcp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0", id: 1, method: "tools/call",
-          params: { name: "kb_search", arguments: { query: q } },
-        }),
-      });
-      const d = await r.json();
-      const text = d?.result?.content?.[0]?.text;
-      const data = text ? JSON.parse(text) : {};
-      setKbResults(data.results ?? []);
-      setKbOpen(true);
-    } catch {
-      setKbResults([]);
-    } finally {
-      setKbLoading(false);
-    }
-  }, []);
-
-  const onKbInput = useCallback((val: string) => {
-    setKbQuery(val);
-    setKbSelected(null);
-    setKbDetail(null);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => doSearch(val), 350);
-  }, [doSearch]);
-
-  // 点击素材 → 加载详情
-  const onSelectResult = async (r: KbResult) => {
-    setKbSelected(r);
-    setKbOpen(false);
-    // 尝试读取 JSON 素材卡内容
-    try {
-      const resp = await fetch(`/api/kb/asset?path=${encodeURIComponent(r.abs_path)}`);
-      const detail = await resp.json();
-      setKbDetail(detail);
-    } catch {
-      setKbDetail(null);
-    }
-  };
-
-  // 点击外部关闭下拉
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (kbRef.current && !kbRef.current.contains(e.target as Node)) setKbOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
-
-  if (error) return <div className="error" style={{ color: "#f87171", padding: 24 }}>{error}</div>;
-  if (!data) return <div className="loading" style={{ color: "#888", padding: 24 }}>加载中…</div>;
+  if (error) return <div style={{ color: "#f87171", padding: 24 }}>{error}</div>;
+  if (!data) return <div style={{ color: "#888", padding: 24 }}>加载中…</div>;
 
   const { fps, items, transitions } = data;
   const totalFrames = items.length > 0
-    ? Math.max(...items.map(i => i.startFrame + i.durationInFrames))
-    : 240;
+    ? Math.max(...items.map(i => i.startFrame + i.durationInFrames), fps * 5)
+    : fps * 10;
 
-  const tracks = new Map<string, Clip[]>();
+  // 按轨道分组
+  const tracks = new Map<string, ClipData[]>();
   for (const item of items) {
     const list = tracks.get(item.track) ?? [];
     list.push(item);
     tracks.set(item.track, list);
   }
+  const sortedTrackIds = [...tracks.keys()].sort((a, b) => {
+    const aIsAudio = a.startsWith("A");
+    const bIsAudio = b.startsWith("A");
+    if (aIsAudio !== bIsAudio) return aIsAudio ? 1 : -1;
+    return a.localeCompare(b);
+  });
 
-  const pxPerFrame = 3;
   const headerWidth = 80;
 
+  const handleSelectClip = (clip: ClipData) => {
+    setSelectedClip(prev => prev?.id === clip.id ? null : clip);
+  };
+
+  const zoomIn = () => setZoomIdx(i => Math.min(i + 1, ZOOM_LEVELS.length - 1));
+  const zoomOut = () => setZoomIdx(i => Math.max(i - 1, 0));
+
   return (
-    <div style={{ fontFamily: "system-ui", background: "#111", color: "#eee", minHeight: "100vh" }}>
-      {/* 顶栏 */}
-      <div style={{ padding: "12px 16px", borderBottom: "1px solid #333", display: "flex", alignItems: "center", gap: 12 }}>
-        <button onClick={() => window.history.back()} style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 20 }}>←</button>
-        <span style={{ fontSize: 18, fontWeight: 600 }}>萌宠包子记</span>
+    <div style={{ fontFamily: "system-ui", background: "#111", color: "#eee", minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+      {/* ═══ 顶栏 ═══ */}
+      <div style={{ padding: "10px 16px", borderBottom: "1px solid #333", display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+        <button onClick={() => onBack ? onBack() : window.history.back()} style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 20 }}>←</button>
+        <span style={{ fontSize: 18, fontWeight: 600 }}>{projectName || projectId}</span>
         <span style={{ color: "#666", fontSize: 13, marginLeft: 8 }}>
           {fps}fps · {items.length} 片段 · {transitions.length} 转场 · {frameToTime(totalFrames, fps)}
         </span>
@@ -204,81 +142,81 @@ export default function TimelineViewer({ projectId }: { projectId: string }) {
           {isRendering ? "⏳ 渲染中" : "🎬 渲染"}
         </button>
 
-        {/* KB 搜索栏 */}
-        <div ref={kbRef} style={{ marginLeft: "auto", position: "relative" }}>
-          <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
-            <span style={{ position: "absolute", left: 10, fontSize: 14, zIndex: 1 }}>🔍</span>
-            <input
-              type="text"
-              value={kbQuery}
-              onChange={e => onKbInput(e.target.value)}
-              onFocus={() => { if (kbResults.length > 0) setKbOpen(true); }}
-              placeholder="搜索知识库素材…"
-              style={{
-                padding: "7px 12px 7px 32px", borderRadius: 8, border: "1px solid #444",
-                background: "#1a1a1a", color: "#eee", fontSize: 13, width: 240,
-                outline: "none", transition: "border-color 0.2s",
-              }}
-              onKeyDown={e => { if (e.key === "Escape") setKbOpen(false); }}
-            />
-            {kbLoading && (
-              <span style={{ position: "absolute", right: 10, color: "#888", fontSize: 12 }}>⏳</span>
-            )}
-          </div>
+        {/* 导出按钮 */}
+        <button
+          onClick={() => {
+            const blob = new Blob([JSON.stringify({ projectId, projectName, fps, items, transitions }, null, 2)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `${projectName || projectId}-timeline.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+          }}
+          style={{
+            background: "none", border: "1px solid #555", color: "#ccc",
+            borderRadius: 6, padding: "6px 14px", fontSize: 13, fontWeight: 600,
+            cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+          }}
+        >
+          📦 导出
+        </button>
 
-          {/* 下拉结果 */}
-          {kbOpen && kbResults.length > 0 && (
-            <div style={{
-              position: "absolute", top: "100%", left: 0, right: 0, zIndex: 100,
-              background: "#1e1e1e", border: "1px solid #444", borderRadius: 8,
-              marginTop: 4, maxHeight: 320, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
-            }}>
-              {kbResults.map((r, i) => {
-                const typeInfo = TYPE_LABELS[r.type] ?? { label: r.type, color: "#6b7280" };
-                return (
-                  <div key={i}
-                    onClick={() => onSelectResult(r)}
-                    style={{
-                      padding: "8px 12px", cursor: "pointer", borderBottom: "1px solid #2a2a2a",
-                      display: "flex", alignItems: "center", gap: 8,
-                      background: kbSelected?.abs_path === r.abs_path ? "#2a2a2a" : "transparent",
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.background = "#2a2a2a")}
-                    onMouseLeave={e => { if (kbSelected?.abs_path !== r.abs_path) e.currentTarget.style.background = "transparent"; }}
-                  >
-                    <span style={{
-                      fontSize: 10, padding: "1px 6px", borderRadius: 4,
-                      background: typeInfo.color + "30", color: typeInfo.color,
-                      fontWeight: 600, flexShrink: 0,
-                    }}>
-                      {typeInfo.label}
-                    </span>
-                    <span style={{ fontSize: 13, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {r.filename}
-                    </span>
-                    <span style={{ fontSize: 10, color: "#666" }}>
-                      {(r.score * 100).toFixed(0)}%
-                    </span>
-                    {r.description && (
-                      <span style={{ fontSize: 10, color: "#555", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 100 }}>
-                        {r.description}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
+        {/* 导入按钮 */}
+        <label
+          style={{
+            background: "none", border: "1px solid #555", color: "#ccc",
+            borderRadius: 6, padding: "6px 14px", fontSize: 13, fontWeight: 600,
+            cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+          }}
+        >
+          📥 导入
+          <input
+            type="file"
+            accept=".json"
+            style={{ display: "none" }}
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              try {
+                const text = await file.text();
+                const imported = JSON.parse(text);
+                const clips = imported.items ?? imported.clips ?? [];
+                for (const clip of clips) {
+                  await fetch(`/api/projects/${encodeURIComponent(projectId)}/clips`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      name: clip.name,
+                      kind: clip.kind ?? "video",
+                      track: clip.track ?? "V1",
+                      start_frame: clip.startFrame ?? 0,
+                      duration_frames: clip.durationInFrames ?? 60,
+                      src: clip.src ?? "",
+                    }),
+                  });
+                }
+                window.location.reload();
+              } catch (err) {
+                alert("导入失败: " + (err as Error).message);
+              }
+            }}
+          />
+        </label>
 
-          {kbOpen && kbResults.length === 0 && kbQuery.trim().length > 0 && !kbLoading && (
-            <div style={{
-              position: "absolute", top: "100%", left: 0, right: 0, zIndex: 100,
-              background: "#1e1e1e", border: "1px solid #444", borderRadius: 8,
-              marginTop: 4, padding: "12px 16px", fontSize: 12, color: "#666",
-            }}>
-              未找到匹配的素材
-            </div>
-          )}
+        {/* 缩放控制 */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: "auto" }}>
+          <button onClick={zoomOut} disabled={zoomIdx === 0} style={{
+            background: "#222", border: "1px solid #444", color: zoomIdx === 0 ? "#555" : "#ccc",
+            borderRadius: 4, width: 26, height: 26, cursor: zoomIdx === 0 ? "default" : "pointer", fontSize: 14,
+          }}>−</button>
+          <span style={{ fontSize: 11, color: "#888", minWidth: 36, textAlign: "center" }}>
+            {pxPerFrame}px/f
+          </span>
+          <button onClick={zoomIn} disabled={zoomIdx === ZOOM_LEVELS.length - 1} style={{
+            background: "#222", border: "1px solid #444", color: zoomIdx === ZOOM_LEVELS.length - 1 ? "#555" : "#ccc",
+            borderRadius: 4, width: 26, height: 26, cursor: zoomIdx === ZOOM_LEVELS.length - 1 ? "default" : "pointer", fontSize: 14,
+          }}>+</button>
         </div>
       </div>
 
@@ -290,162 +228,105 @@ export default function TimelineViewer({ projectId }: { projectId: string }) {
         onCancel={() => setIsRendering(false)}
       />
 
-      <div style={{ display: "flex", height: "calc(100vh - 49px)" }}>
-        {/* 左侧：素材库 + KB 选中详情 */}
-        <div style={{ width: 240, borderRight: "1px solid #333", padding: 8, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
-          {/* 项目素材 */}
-          <div>
-            <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>📦 项目素材 ({assets.length})</div>
-            {assets.map(a => (
-              <div key={a.id} onClick={() => setSelectedMedia({ src: a.src, kind: a.kind as "video" | "audio", name: a.name })} style={{
-                background: "#1a1a1a", borderRadius: 6, padding: 6, marginBottom: 6,
-                border: "1px solid #333", cursor: "pointer",
-              }}>
-                <video src={a.src} style={{ width: "100%", borderRadius: 4, background: "#000" }}
-                  onMouseEnter={e => (e.target as HTMLVideoElement).play()}
-                  onMouseLeave={e => { (e.target as HTMLVideoElement).pause(); (e.target as HTMLVideoElement).currentTime = 0; }}
-                />
-                <div style={{ fontSize: 11, marginTop: 4, wordBreak: "break-all" }}>{a.name}</div>
-              </div>
+      {/* ═══ 主体 ═══ */}
+      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+        {/* 左侧面板：素材池 + 素材库 */}
+        <SidePanel
+          projectId={projectId}
+          onPreview={(media) => setSelectedMedia(media)}
+        />
+
+        {/* ═══ 右侧：时间线区域 ═══ */}
+        <div style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
+          {/* 标尺 */}
+          <Ruler
+            totalFrames={totalFrames}
+            fps={fps}
+            pxPerFrame={pxPerFrame}
+            playhead={playhead}
+            onSeek={setPlayhead}
+            headerWidth={headerWidth}
+          />
+
+          {/* 轨道列表 */}
+          <div style={{ padding: "4px 0", flex: 1 }}>
+            {sortedTrackIds.map(trackId => (
+              <TrackLane
+                key={trackId}
+                trackId={trackId}
+                clips={tracks.get(trackId) ?? []}
+                pxPerFrame={pxPerFrame}
+                totalFrames={totalFrames}
+                color={colorForTrack(trackId)}
+                selectedClipId={selectedClip?.id ?? null}
+                onSelectClip={handleSelectClip}
+                fps={fps}
+                headerWidth={headerWidth}
+              />
             ))}
+
+            {sortedTrackIds.length === 0 && (
+              <div style={{ padding: 24, color: "#555", fontSize: 13, textAlign: "center" }}>
+                暂无轨道数据
+              </div>
+            )}
           </div>
 
-          {/* KB 选中详情卡 */}
-          {kbSelected && (
-            <div style={{ borderTop: "1px solid #333", paddingTop: 8 }}>
-              <div style={{ fontSize: 12, color: "#888", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
-                🧠 知识库
-                <button onClick={() => { setKbSelected(null); setKbDetail(null); }}
-                  style={{ marginLeft: "auto", background: "none", border: "none", color: "#666", cursor: "pointer", fontSize: 14 }}>
-                  ✕
-                </button>
-              </div>
-              <div style={{
-                background: "#1a1a1a", borderRadius: 6, padding: 10, border: "1px solid #333", fontSize: 12,
-              }}>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>{kbSelected.filename}</div>
-                <span style={{
-                  fontSize: 10, padding: "1px 6px", borderRadius: 4,
-                  background: (TYPE_LABELS[kbSelected.type]?.color ?? "#666") + "30",
-                  color: TYPE_LABELS[kbSelected.type]?.color ?? "#888",
-                  fontWeight: 600,
-                }}>
-                  {TYPE_LABELS[kbSelected.type]?.label ?? kbSelected.type}
-                </span>
-                <span style={{ fontSize: 10, color: "#666", marginLeft: 8 }}>
-                  匹配度 {(kbSelected.score * 100).toFixed(0)}%
-                </span>
-
-                {kbDetail ? (
-                  <pre style={{
-                    marginTop: 8, fontSize: 10, color: "#aaa",
-                    background: "#111", borderRadius: 4, padding: 8,
-                    maxHeight: 300, overflowY: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all",
-                    fontFamily: "monospace", lineHeight: 1.5,
-                  }}>
-                    {JSON.stringify(kbDetail, null, 2)}
-                  </pre>
-                ) : kbDetail === null ? (
-                  <div style={{ marginTop: 6, fontSize: 10, color: "#555" }}>加载中…</div>
-                ) : (
-                  <div style={{ marginTop: 6, fontSize: 10, color: "#666" }}>
-                    {kbSelected.description || "无描述"}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* 右侧：时间线 */}
-        <div style={{ flex: 1, overflow: "auto", padding: 16 }}>
-          {/* 时间尺 */}
-          <div style={{ display: "flex", marginLeft: headerWidth, marginBottom: 4, position: "relative" }}>
-            {Array.from({ length: Math.ceil(totalFrames / fps) + 1 }, (_, i) => (
-              <div key={i} style={{
-                position: "absolute", left: i * fps * pxPerFrame,
-                fontSize: 10, color: "#666", transform: "translateX(-50%)",
-              }}>
-                {i}s
-              </div>
-            ))}
-          </div>
-
-          {/* 轨道 */}
-          {[...tracks.entries()].map(([trackId, clips]) => (
-            <div key={trackId} style={{ display: "flex", marginBottom: 4, alignItems: "center" }}>
-              <div style={{
-                width: headerWidth - 8, fontSize: 11, color: colorForTrack(trackId),
-                fontWeight: 600, textAlign: "right", paddingRight: 8, flexShrink: 0,
-              }}>
-                {trackId.toUpperCase()}
-              </div>
-
-              <div style={{
-                flex: 1, height: 48, background: "#1a1a1a", borderRadius: 4,
-                position: "relative", border: "1px solid #2a2a2a",
-                minWidth: totalFrames * pxPerFrame,
-              }}>
-                {clips.map(clip => (
-                  <div key={clip.id} title={`${clip.name}\nframe ${clip.startFrame}-${clip.startFrame + clip.durationInFrames}`}
-                    onClick={() => setSelectedMedia({ src: clip.src, kind: clip.kind as "video" | "audio", name: clip.name })}
-                    style={{
-                      position: "absolute",
-                      left: clip.startFrame * pxPerFrame,
-                      width: clip.durationInFrames * pxPerFrame,
-                      height: "100%",
-                      background: colorForTrack(trackId) + "40",
-                      borderLeft: `3px solid ${colorForTrack(trackId)}`,
-                      borderRadius: 4,
-                      display: "flex", alignItems: "center",
-                      paddingLeft: 6, fontSize: 11,
-                      cursor: "pointer",
-                      overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis",
-                      boxSizing: "border-box",
-                    }}
-                  >
-                    {clip.name}
-                  </div>
-                ))}
-
-                {transitions.map(tx => {
-                  const from = items.find(i => i.id === tx.fromItemId);
-                  if (!from) return null;
-                  const txFrame = from.startFrame + from.durationInFrames;
-                  return (
-                    <div key={tx.id} title={`${tx.type} · ${tx.durationInFrames}f`}
-                      style={{
-                        position: "absolute",
-                        left: (txFrame - tx.durationInFrames / 2) * pxPerFrame,
-                        width: tx.durationInFrames * pxPerFrame,
-                        height: "100%",
-                        background: "#f59e0b20",
-                        borderLeft: "2px dashed #f59e0b",
-                        borderRight: "2px dashed #f59e0b",
-                        zIndex: 2,
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        fontSize: 9, color: "#f59e0b",
-                      }}
-                    >
-                      {tx.type}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-
-          <div style={{ position: "relative", marginLeft: headerWidth, marginTop: 8 }}>
-            <input type="range" min={0} max={totalFrames} value={playhead}
-              onChange={e => setPlayhead(Number(e.target.value))}
-              style={{ width: "100%", cursor: "pointer", accentColor: "#3b82f6" }}
-            />
-            <div style={{ fontSize: 11, color: "#888", textAlign: "center", marginTop: 2 }}>
-              {frameToTime(playhead, fps)} / {frameToTime(totalFrames, fps)}
+          {/* 播放头控制条 */}
+          <div style={{ padding: "8px 16px", borderTop: "1px solid #2a2a2a", flexShrink: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <span style={{ fontSize: 12, color: "#ef4444", fontFamily: "monospace", minWidth: 60 }}>
+                {frameToTime(playhead, fps)}
+              </span>
+              <input type="range" min={0} max={totalFrames} value={playhead}
+                onChange={e => setPlayhead(Number(e.target.value))}
+                style={{ flex: 1, cursor: "pointer", accentColor: "#ef4444" }}
+              />
+              <span style={{ fontSize: 12, color: "#666", fontFamily: "monospace", minWidth: 60, textAlign: "right" }}>
+                {frameToTime(totalFrames, fps)}
+              </span>
             </div>
           </div>
         </div>
       </div>
+
+      {/* 选中片段信息浮层 */}
+      {selectedClip && (
+        <div style={{
+          position: "fixed", bottom: 16, right: 16, zIndex: 900,
+          background: "#1e1e1e", border: "1px solid #444", borderRadius: 8,
+          padding: 12, width: 220, boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
+        }}>
+          <div style={{ fontSize: 12, color: "#888", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+            🎬 片段详情
+            <button onClick={() => setSelectedClip(null)}
+              style={{ marginLeft: "auto", background: "none", border: "none", color: "#666", cursor: "pointer", fontSize: 14 }}>
+              ✕
+            </button>
+          </div>
+          <div style={{ fontSize: 12 }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>{selectedClip.name}</div>
+            <div style={{ color: "#888", lineHeight: 1.8 }}>
+              <div>轨道: <span style={{ color: colorForTrack(selectedClip.track) }}>{selectedClip.track}</span></div>
+              <div>类型: {selectedClip.kind}</div>
+              <div>起始: {frameToTime(selectedClip.startFrame, fps)} ({selectedClip.startFrame}f)</div>
+              <div>时长: {frameToTime(selectedClip.durationInFrames, fps)} ({selectedClip.durationInFrames}f)</div>
+              <div>结束: {frameToTime(selectedClip.startFrame + selectedClip.durationInFrames, fps)}</div>
+            </div>
+            {selectedClip.src && (
+              <button
+                onClick={() => setSelectedMedia({ src: selectedClip.src, kind: selectedClip.kind as "video" | "audio", name: selectedClip.name })}
+                style={{
+                  marginTop: 8, background: "#3b82f6", border: "none", color: "#fff",
+                  borderRadius: 4, padding: "4px 12px", fontSize: 11, cursor: "pointer",
+                }}
+              >
+                ▶ 预览
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* MediaPlayer 弹层 */}
       {selectedMedia && (
