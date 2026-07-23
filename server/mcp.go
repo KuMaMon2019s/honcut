@@ -28,6 +28,7 @@ type MCPServer struct {
 	outputDir string
 	tools     map[string]func(map[string]interface{}) (interface{}, error)
 	editors   []map[string]interface{} // connected editor sessions
+	arkClient *generate.ArkClient      // shared Ark API client
 }
 
 // NewMCPServer creates a new MCP server with the given store
@@ -37,6 +38,7 @@ func NewMCPServer(store *Store, pm *render.ProgressManager, outputDir string) *M
 		pm:        pm,
 		outputDir: outputDir,
 		tools:     make(map[string]func(map[string]interface{}) (interface{}, error)),
+		arkClient: generate.NewArkClient(),
 	}
 	server.registerTools()
 	return server
@@ -619,6 +621,48 @@ func (s *MCPServer) ListTools() []MCPTool {
 				"required": []string{"query"},
 			},
 		},
+		// ── Generation mode: text-to-video, text-to-image, KB search ──
+		{
+			Name:        "generate_video",
+			Description: "Generate a video from a text prompt using doubao-seedance-2.0 (Ark Agent Plan).",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"prompt":       map[string]interface{}{"type": "string", "description": "Text description of the video to generate"},
+					"variant":      map[string]interface{}{"type": "string", "enum": []string{"standard", "fast", "mini"}, "description": "Model variant (default: fast)"},
+					"duration":     map[string]interface{}{"type": "number", "description": "Video duration in seconds, 3-15 (default: 5)"},
+					"aspect_ratio": map[string]interface{}{"type": "string", "enum": []string{"16:9", "9:16", "1:1"}, "description": "Aspect ratio (default: 16:9)"},
+					"resolution":   map[string]interface{}{"type": "string", "enum": []string{"480P", "720P", "1080P"}, "description": "Resolution (default: 720P)"},
+					"output_path":  map[string]interface{}{"type": "string", "description": "Output file path (default: seedance_output.mp4)"},
+				},
+				"required": []string{"prompt"},
+			},
+		},
+		{
+			Name:        "generate_image",
+			Description: "Generate an image from a text prompt using doubao-seedream-5.0-lite (Ark Agent Plan).",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"prompt":      map[string]interface{}{"type": "string", "description": "Text description of the image to generate"},
+					"size":        map[string]interface{}{"type": "string", "description": "Image size e.g. 1920x1920 (default: 1920x1920)"},
+					"output_path": map[string]interface{}{"type": "string", "description": "Output file path (default: seedream_output.png)"},
+				},
+				"required": []string{"prompt"},
+			},
+		},
+		{
+			Name:        "kb_search",
+			Description: "Semantic search over the knowledge base for characters, scenes, styles, and other assets",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query": map[string]interface{}{"type": "string", "description": "Natural language search query"},
+					"limit": map[string]interface{}{"type": "number", "description": "Max results (default 5)"},
+				},
+				"required": []string{"query"},
+			},
+		},
 	}
 }
 
@@ -688,7 +732,18 @@ func (s *MCPServer) HandleMCPRequest(method string, params map[string]interface{
 				},
 			}, nil
 		}
-		resultJSON, _ := json.Marshal(result)
+		resultJSON, err := json.Marshal(result)
+		if err != nil {
+			return map[string]interface{}{
+				"isError": true,
+				"content": []map[string]interface{}{
+					{
+						"type": "text",
+						"text": "failed to marshal result: " + err.Error(),
+					},
+				},
+			}, nil
+		}
 		return map[string]interface{}{
 			"isError": false,
 			"content": []map[string]interface{}{
@@ -1343,7 +1398,10 @@ func (s *MCPServer) setItemTiming(params map[string]interface{}) (interface{}, e
 			}
 		}
 
-		propsJSON, _ := json.Marshal(propsMap)
+		propsJSON, err := json.Marshal(propsMap)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal fade props: %w", err)
+		}
 		if err := s.store.UpdateTimelineItemProps(itemID, string(propsJSON)); err != nil {
 			return nil, fmt.Errorf("failed to update fade props: %w", err)
 		}
@@ -2234,8 +2292,6 @@ func (s *MCPServer) manageDesignStyle(params map[string]interface{}) (interface{
 
 // ─── Generation Mode: text-to-video & text-to-image ──────────────────
 
-var sharedArkClient = generate.NewArkClient()
-
 // generateVideo creates a video from text prompt using doubao-seedance-2.0
 func (s *MCPServer) generateVideo(params map[string]interface{}) (interface{}, error) {
 	prompt, ok := params["prompt"].(string)
@@ -2251,7 +2307,7 @@ func (s *MCPServer) generateVideo(params map[string]interface{}) (interface{}, e
 	resolution, _ := params["resolution"].(string)
 	outputPath, _ := params["output_path"].(string)
 
-	seedance := generate.NewSeedance(sharedArkClient)
+	seedance := generate.NewSeedance(s.arkClient)
 	result := seedance.Generate(context.Background(), generate.SeedanceInput{
 		Prompt:      prompt,
 		Variant:     variant,
@@ -2272,7 +2328,7 @@ func (s *MCPServer) generateImage(params map[string]interface{}) (interface{}, e
 	size, _ := params["size"].(string)
 	outputPath, _ := params["output_path"].(string)
 
-	seedream := generate.NewSeedream(sharedArkClient)
+	seedream := generate.NewSeedream(s.arkClient)
 	result := seedream.Generate(context.Background(), generate.SeedreamInput{
 		Prompt:     prompt,
 		Size:       size,

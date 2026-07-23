@@ -81,7 +81,9 @@ func (s *Seedream) Generate(ctx context.Context, input SeedreamInput) Generation
 		if err != nil {
 			return GenerationResult{Success: false, Error: "base64: " + err.Error()}
 		}
-		os.WriteFile(input.OutputPath, decoded, 0644)
+		if err := os.WriteFile(input.OutputPath, decoded, 0644); err != nil {
+			return GenerationResult{Success: false, Error: "write file: " + err.Error()}
+		}
 		return GenerationResult{Success: true, Model: "doubao-seedream-5.0-lite",
 			Output: input.OutputPath, Format: "png", Duration: time.Since(start).Seconds()}
 	}

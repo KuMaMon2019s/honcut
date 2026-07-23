@@ -25,7 +25,7 @@ type EmbeddingClient struct {
 func NewEmbeddingClient() *EmbeddingClient {
 	apiKey := os.Getenv("ARK_API_KEY")
 	model := "doubao-embedding-vision"
-	if v := os.Getenv("ARK_VISION_MODEL"); v != "" {
+	if v := os.Getenv("ARK_EMBEDDING_MODEL"); v != "" {
 		model = v
 	}
 	return &EmbeddingClient{
@@ -42,7 +42,10 @@ func (e *EmbeddingClient) Embed(ctx context.Context, text string) ([]float32, er
 		"model": e.model,
 		"input": text,
 	}
-	body, _ := json.Marshal(reqBody)
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal embed request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", e.baseURL+"/embeddings",
 		bytes.NewReader(body))
@@ -127,7 +130,10 @@ func (q *QdrantClient) Search(ctx context.Context, vector []float32, limit int) 
 		"limit":         limit,
 		"with_payload":  true,
 	}
-	body, _ := json.Marshal(reqBody)
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal search request: %w", err)
+	}
 
 	url := fmt.Sprintf("%s/collections/%s/points/search", q.baseURL, q.collection)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
@@ -162,7 +168,10 @@ func (q *QdrantClient) Upsert(ctx context.Context, id string, vector []float32, 
 			"id": id, "vector": vector, "payload": payload,
 		}},
 	}
-	body, _ := json.Marshal(reqBody)
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("marshal upsert request: %w", err)
+	}
 
 	url := fmt.Sprintf("%s/collections/%s/points", q.baseURL, q.collection)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(body))
@@ -184,9 +193,15 @@ func (q *QdrantClient) Upsert(ctx context.Context, id string, vector []float32, 
 }
 
 func (q *QdrantClient) Delete(ctx context.Context, id string) error {
-	body, _ := json.Marshal(map[string]interface{}{"points": []string{id}})
+	body, err := json.Marshal(map[string]interface{}{"points": []string{id}})
+	if err != nil {
+		return fmt.Errorf("marshal delete request: %w", err)
+	}
 	url := fmt.Sprintf("%s/collections/%s/points/delete", q.baseURL, q.collection)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create delete request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := q.httpClient.Do(req)
 	if err != nil {
@@ -202,7 +217,10 @@ func (q *QdrantClient) Delete(ctx context.Context, id string) error {
 
 func (q *QdrantClient) Health(ctx context.Context) error {
 	url := fmt.Sprintf("%s/healthz", q.baseURL)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("create health request: %w", err)
+	}
 	resp, err := q.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("qdrant health: %w", err)

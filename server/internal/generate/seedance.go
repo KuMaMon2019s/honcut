@@ -71,7 +71,10 @@ func (s *Seedance) Generate(ctx context.Context, input SeedanceInput) Generation
 	if err != nil {
 		return GenerationResult{Success: false, Model: model, Error: err.Error()}
 	}
-	data, _ := readBody(resp)
+	data, err := readBody(resp)
+	if err != nil {
+		return GenerationResult{Success: false, Model: model, Error: "read submit response: " + err.Error()}
+	}
 	if resp.StatusCode != 200 {
 		return GenerationResult{Success: false, Model: model, Error: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(data))}
 	}
@@ -79,19 +82,34 @@ func (s *Seedance) Generate(ctx context.Context, input SeedanceInput) Generation
 	var submit struct {
 		ID string `json:"id"`
 	}
-	json.Unmarshal(data, &submit)
+	if err := json.Unmarshal(data, &submit); err != nil {
+		return GenerationResult{Success: false, Model: model, Error: "parse submit response: " + err.Error()}
+	}
 	if submit.ID == "" {
 		return GenerationResult{Success: false, Model: model, Error: "no task_id in response"}
 	}
 
-	// Poll
+	// Poll with ctx awareness
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 	for i := 0; i < 300; i++ {
-		time.Sleep(5 * time.Second)
+		select {
+		case <-ctx.Done():
+			return GenerationResult{Success: false, Model: model, Error: "cancelled: " + ctx.Err().Error()}
+		case <-ticker.C:
+		}
+
 		resp, err := s.client.get(ctx, "/contents/generations/tasks/"+submit.ID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return GenerationResult{Success: false, Model: model, Error: "cancelled: " + ctx.Err().Error()}
+			}
+			continue
+		}
+		pd, err := readBody(resp)
 		if err != nil {
 			continue
 		}
-		pd, _ := readBody(resp)
 		var poll struct {
 			Status  string `json:"status"`
 			Content struct {
@@ -101,7 +119,9 @@ func (s *Seedance) Generate(ctx context.Context, input SeedanceInput) Generation
 				Message string `json:"message"`
 			} `json:"error"`
 		}
-		json.Unmarshal(pd, &poll)
+		if err := json.Unmarshal(pd, &poll); err != nil {
+			continue
+		}
 
 		switch poll.Status {
 		case "succeeded":

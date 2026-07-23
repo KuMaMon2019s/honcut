@@ -26,6 +26,7 @@ func DefaultProviders() []LlmProviderPreset {
 		// 视频生成
 		{ID: "doubao-seedance-2.0", Label: "Seedance 2.0 (视频)", BaseURL: base},
 		{ID: "doubao-seedance-2.0-fast", Label: "Seedance Fast (视频)", BaseURL: base},
+		{ID: "doubao-seedance-2.0-mini", Label: "Seedance Mini (视频)", BaseURL: base},
 
 		// 语音
 		{ID: "doubao-seed-tts-2.0", Label: "TTS 语音合成", BaseURL: base},

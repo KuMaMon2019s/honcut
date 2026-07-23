@@ -10,9 +10,14 @@ import (
 
 	honcutserver "honcut-server"
 	"honcut-server/internal/render"
+
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	// Load .env file (if exists) — must run before any os.Getenv calls
+	godotenv.Load()
+
 	// Load config
 	homeDir, err := os.UserHomeDir()
 	if err != nil {

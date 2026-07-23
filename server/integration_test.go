@@ -233,8 +233,8 @@ func TestMCP_ToolRegistration(t *testing.T) {
 	mcp := NewMCPServer(store, nil, "")
 
 	tools := mcp.ListTools()
-	if len(tools) != 35 {
-		t.Fatalf("expected 35 tools, got %d", len(tools))
+	if len(tools) != 38 {
+		t.Fatalf("expected 38 tools, got %d", len(tools))
 	}
 	expectedTools := []string{
 		"edit_project", "add_clip", "trim_clip", "move_clip", "add_transition", "read_timeline", "upload_media",
