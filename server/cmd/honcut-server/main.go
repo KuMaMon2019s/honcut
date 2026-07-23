@@ -110,18 +110,12 @@ func main() {
 	}
 }
 
-// countConfiguredKeys counts how many keystore entries are set
+// countConfiguredKeys returns whether the Ark API key is set
 func countConfiguredKeys(ks *honcutconfig.KeyStore) int {
-	count := 0
-	keys := []string{honcutconfig.EnvLLMProvider, honcutconfig.EnvLLMAPIKey,
-		honcutconfig.EnvArkAPIKey, honcutconfig.EnvSeedanceAPIKey,
-		honcutconfig.EnvImageAPIKey}
-	for _, k := range keys {
-		if ks.IsConfigured(k) {
-			count++
-		}
+	if ks.IsConfigured(honcutconfig.EnvArkAPIKey) {
+		return 1
 	}
-	return count
+	return 0
 }
 
 // configHandler exposes non-secret model configuration (like OpenChatCut's keyStatus)
