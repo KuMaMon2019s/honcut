@@ -10,3 +10,4 @@ __pycache__/
 # Go 编译产物（make build 生成，不入库）
 server/honcut-server
 server/honcut-mcp
+.env
