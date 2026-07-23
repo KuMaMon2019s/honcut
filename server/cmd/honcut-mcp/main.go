@@ -136,7 +136,11 @@ func sendResponse(writer *bufio.Writer, id interface{}, result interface{}) {
 		"id":      id,
 		"result":  result,
 	}
-	data, _ := json.Marshal(response)
+	data, err := json.Marshal(response)
+	if err != nil {
+		log.Printf("sendResponse: marshal error: %v", err)
+		return
+	}
 	writer.Write(data)
 	writer.WriteString("\n")
 	writer.Flush()
@@ -151,7 +155,11 @@ func sendError(writer *bufio.Writer, id interface{}, code int, message string) {
 			"message": message,
 		},
 	}
-	data, _ := json.Marshal(response)
+	data, err := json.Marshal(response)
+	if err != nil {
+		log.Printf("sendError: marshal error: %v", err)
+		return
+	}
 	writer.Write(data)
 	writer.WriteString("\n")
 	writer.Flush()

@@ -68,6 +68,11 @@ func APIHandler(store *Store, pm *render.ProgressManager, outputDir string) http
 	})
 	mux.HandleFunc("DELETE /api/projects/{id}/clips/{clip_id}", func(w http.ResponseWriter, r *http.Request) {
 		deleteClip(w, r, store, r.PathValue("clip_id"))
+
+	// Transitions
+	mux.HandleFunc("GET /api/projects/{id}/transitions", func(w http.ResponseWriter, r *http.Request) {
+		listTransitions(w, r, store, r.PathValue("id"))
+	})
 	})
 
 	// New endpoints for Batch A tools
@@ -768,7 +773,11 @@ func setClipTiming(w http.ResponseWriter, r *http.Request, store *Store, project
 			}
 		}
 
-		propsJSON, _ := json.Marshal(propsMap)
+		propsJSON, err := json.Marshal(propsMap)
+		if err != nil {
+			http.Error(w, "marshal props: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 		if err := store.UpdateTimelineItemProps(clipID, string(propsJSON)); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1005,8 +1014,16 @@ func createDesignStyle(w http.ResponseWriter, r *http.Request, store *Store, pro
 		return
 	}
 
-	colorsJSON, _ := json.Marshal(req.Colors)
-	fontsJSON, _ := json.Marshal(req.Fonts)
+	colorsJSON, err := json.Marshal(req.Colors)
+	if err != nil {
+		http.Error(w, "marshal colors: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	fontsJSON, err := json.Marshal(req.Fonts)
+	if err != nil {
+		http.Error(w, "marshal fonts: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	ds := &DesignStyle{
 		ID:        uuid.New().String(),
@@ -1040,12 +1057,20 @@ func updateDesignStyle(w http.ResponseWriter, r *http.Request, store *Store, pro
 		namePtr = &req.Name
 	}
 	if req.Colors != nil {
-		colorsJSON, _ := json.Marshal(req.Colors)
+		colorsJSON, err := json.Marshal(req.Colors)
+		if err != nil {
+			http.Error(w, "marshal colors: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 		colorsStr := string(colorsJSON)
 		colorsPtr = &colorsStr
 	}
 	if req.Fonts != nil {
-		fontsJSON, _ := json.Marshal(req.Fonts)
+		fontsJSON, err := json.Marshal(req.Fonts)
+		if err != nil {
+			http.Error(w, "marshal fonts: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 		fontsStr := string(fontsJSON)
 		fontsPtr = &fontsStr
 	}
@@ -1255,3 +1280,14 @@ func handleMCPHTTP(w http.ResponseWriter, r *http.Request, mcpServer *MCPServer)
 }
 
 
+
+// listTransitions returns all transitions for a project
+func listTransitions(w http.ResponseWriter, r *http.Request, store *Store, projectID string) {
+	transitions, err := store.ListTransitions(projectID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(transitions)
+}

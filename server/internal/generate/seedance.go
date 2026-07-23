@@ -21,10 +21,10 @@ var seedanceModels = map[string]string{
 // SeedanceInput for video generation requests
 type SeedanceInput struct {
 	Prompt        string `json:"prompt"`
-	Variant       string `json:"variant,omitempty"`       // standard | fast | mini
-	Duration      int    `json:"duration,omitempty"`      // 3-15 seconds
-	AspectRatio   string `json:"aspect_ratio,omitempty"`  // 16:9 | 9:16 | 1:1
-	Resolution    string `json:"resolution,omitempty"`    // 480P | 720P | 1080P
+	Variant       string `json:"variant,omitempty"`      // standard | fast | mini
+	Duration      int    `json:"duration,omitempty"`     // 3-15 seconds
+	AspectRatio   string `json:"aspect_ratio,omitempty"` // 16:9 | 9:16 | 1:1
+	Resolution    string `json:"resolution,omitempty"`   // 480P | 720P | 1080P
 	GenerateAudio bool   `json:"generate_audio,omitempty"`
 	OutputPath    string `json:"output_path,omitempty"`
 }

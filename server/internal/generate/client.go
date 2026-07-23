@@ -32,7 +32,7 @@ func (c *ArkClient) post(ctx context.Context, path string, body interface{}) (*h
 	if err != nil {
 		return nil, fmt.Errorf("marshal request body: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+path, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bytes.NewReader(b))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -42,7 +42,7 @@ func (c *ArkClient) post(ctx context.Context, path string, body interface{}) (*h
 }
 
 func (c *ArkClient) get(ctx context.Context, path string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", c.BaseURL+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func (c *ArkClient) get(ctx context.Context, path string) (*http.Response, error
 }
 
 func (c *ArkClient) download(ctx context.Context, url, dstPath string) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}

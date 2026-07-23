@@ -47,7 +47,7 @@ func (e *EmbeddingClient) Embed(ctx context.Context, text string) ([]float32, er
 		return nil, fmt.Errorf("marshal embed request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", e.baseURL+"/embeddings",
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+"/embeddings",
 		bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create embed request: %w", err)

@@ -78,24 +78,50 @@ export default function TimelineViewer({ projectId }: { projectId: string }) {
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
-    fetch(`/api/project/${encodeURIComponent(projectId)}`)
-      .then(r => r.json())
-      .then(d => { setData(d.timeline); setAssets(d.assets ?? []); })
+    // Load project info + timeline clips from honcut API
+    Promise.all([
+      fetch(`/api/projects/${encodeURIComponent(projectId)}`).then(r => r.json()),
+      fetch(`/api/projects/${encodeURIComponent(projectId)}/clips`).then(r => r.json()),
+      fetch(`/api/projects/${encodeURIComponent(projectId)}/transitions`).then(r => r.json()),
+    ])
+      .then(([project, clips, transitions]) => {
+        const items = Array.isArray(clips) ? clips.map((c: any) => ({
+          id: c.id,
+          name: c.name || c.id?.slice(0,8),
+          kind: c.kind || "video",
+          track: c.track || "V1",
+          startFrame: c.start_frame || 0,
+          durationInFrames: c.duration_frames || 60,
+          src: c.src || "",
+          props: typeof c.props === "string" ? JSON.parse(c.props || "{}") : (c.props || {}),
+        })) : [];
+        const trans = Array.isArray(transitions) ? transitions : [];
+        setData({ fps: 24, items, transitions: trans.map((t: any) => ({
+          id: t.id, fromItemId: t.from_item_id, toItemId: t.to_item_id,
+          type: t.type, durationInFrames: t.duration_frames,
+        })) });
+        setAssets([]);
+      })
       .catch(e => setError("加载失败: " + e.message));
   }, [projectId]);
 
-  // KB 搜索（防抖 350ms）
+  // KB 搜索 — via honcut MCP
   const doSearch = useCallback(async (q: string) => {
     if (q.trim().length < 1) { setKbResults([]); setKbOpen(false); return; }
     setKbLoading(true);
     try {
-      const r = await fetch("/api/kb/search", {
+      const r = await fetch("/api/mcp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: q }),
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 1, method: "tools/call",
+          params: { name: "kb_search", arguments: { query: q } },
+        }),
       });
       const d = await r.json();
-      setKbResults(d.results ?? []);
+      const text = d?.result?.content?.[0]?.text;
+      const data = text ? JSON.parse(text) : {};
+      setKbResults(data.results ?? []);
       setKbOpen(true);
     } catch {
       setKbResults([]);
