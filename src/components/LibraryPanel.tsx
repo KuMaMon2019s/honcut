@@ -154,7 +154,7 @@ export default function LibraryPanel({ projectId, selectedClip, onClipUpdated }:
                 key={name}
                 draggable
                 onDragStart={e => {
-                  e.dataTransfer.setData("application/x-transition-type", name);
+                  e.dataTransfer.setData("application/x-honcut-transition", name);
                   e.dataTransfer.effectAllowed = "copy";
                 }}
                 onClick={() => setPendingTransition(active ? null : name)}
@@ -168,6 +168,9 @@ export default function LibraryPanel({ projectId, selectedClip, onClipUpdated }:
               </div>
             );
           })}
+        </div>
+        <div style={{ fontSize: 10, color: "#666", marginTop: 4 }}>
+          拖到时间线片段之间应用
         </div>
       </div>
 

@@ -1,8 +1,9 @@
 // InspectorPanel.tsx — 右侧属性面板
 // 无选中 → 项目概览；有选中 → Clip 属性编辑（snake_case 字段，Tailwind 样式）
 
-import { useState, useEffect } from "react";
-import { api, type Clip } from "../api/client";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { api, type Clip, type Transition } from "../api/client";
+import { TRANSITION_ICONS } from "./LibraryPanel";
 
 interface InspectorPanelProps {
   projectId: string;
@@ -15,6 +16,14 @@ interface InspectorPanelProps {
   onClipUpdated?: () => void;
   onDeselect?: () => void;
   width?: number;
+  onResize?: (width: number) => void;
+  // ── 转场属性 ──
+  transition?: Transition | null;
+  fromClipName?: string;
+  toClipName?: string;
+  onUpdateTransition?: (transitionId: string, body: { type?: string; duration_frames?: number }) => void;
+  onDeleteTransition?: (transitionId: string) => void;
+  onDeselectTransition?: () => void;
 }
 
 function frameToTime(f: number, fps: number): string {
@@ -38,7 +47,9 @@ const inputCls = "bg-inset border border-border rounded px-2 py-1 text-xs text-t
 
 export default function InspectorPanel({
   projectId, clip, fps, totalFrames, clipCount, transitionCount, projectName,
-  onClipUpdated, onDeselect, width = 280,
+  onClipUpdated, onDeselect, width = 280, onResize,
+  transition, fromClipName, toClipName,
+  onUpdateTransition, onDeleteTransition, onDeselectTransition,
 }: InspectorPanelProps) {
   const [name, setName] = useState("");
   const [startFrame, setStartFrame] = useState(0);
@@ -47,6 +58,43 @@ export default function InspectorPanel({
   const [propsText, setPropsText] = useState("");
   const [propsError, setPropsError] = useState(false);
   const [error, setError] = useState("");
+  const [trType, setTrType] = useState("");
+  const [trDuration, setTrDuration] = useState(0);
+  const [resizing, setResizing] = useState(false);
+  const resizeRef = useRef<{ startX: number; startW: number } | null>(null);
+
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    if (!onResize) return;
+    e.preventDefault();
+    setResizing(true);
+    resizeRef.current = { startX: e.clientX, startW: width };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const onMove = (ev: MouseEvent) => {
+      const st = resizeRef.current;
+      if (!st) return;
+      const dx = st.startX - ev.clientX; // 向左拖 = 变宽
+      const newW = Math.max(200, Math.min(450, st.startW + dx));
+      onResize(newW);
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      setResizing(false);
+      resizeRef.current = null;
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [onResize, width]);
+
+  useEffect(() => {
+    if (!transition) return;
+    setTrType(transition.type);
+    setTrDuration(transition.duration_frames);
+  }, [transition?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!clip) return;
@@ -97,10 +145,110 @@ export default function InspectorPanel({
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   };
 
+  // ── 选中转场 → 转场属性（优先于 clip 视图）──
+  if (transition) {
+    const typeKey = Object.keys(TRANSITION_ICONS).find(k => k.toLowerCase() === trType.toLowerCase());
+    return (
+      <div style={{ width, position: "relative" }} className="shrink-0 border-l border-border bg-panel flex flex-col overflow-y-auto">
+        {/* R7: 4px 拖拽条 */}
+        <div
+          onMouseDown={handleResizeMouseDown}
+          style={{
+            position: "absolute", left: 0, top: 0, bottom: 0, width: 4,
+            cursor: "col-resize", zIndex: 20,
+            background: resizing ? "#f59e0b" : "transparent",
+            transition: "background 0.15s",
+          }}
+          onMouseEnter={e => { if (!resizing) e.currentTarget.style.background = "#f59e0b60"; }}
+          onMouseLeave={e => { if (!resizing) e.currentTarget.style.background = "transparent"; }}
+        />
+        {/* 标题栏 */}
+        <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+          <span className="text-sm shrink-0">{(typeKey && TRANSITION_ICONS[typeKey]) || "🔀"}</span>
+          <span className="text-sm font-semibold text-text truncate flex-1">转场</span>
+          <button onClick={onDeselectTransition} className="text-text-dim hover:text-text text-sm shrink-0">✕</button>
+        </div>
+
+        {/* 类型下拉（立即生效） */}
+        <div className="px-4 py-2 flex items-center justify-between gap-3">
+          <label className="text-xs text-text-dim w-16 shrink-0">类型</label>
+          <select
+            className={`${inputCls} flex-1`}
+            value={typeKey ?? ""}
+            onChange={e => {
+              setTrType(e.target.value);
+              onUpdateTransition?.(transition.id, { type: e.target.value });
+            }}
+          >
+            {Object.keys(TRANSITION_ICONS).map(t => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* 时长（帧，blur 提交） */}
+        <div className="px-4 py-2 flex items-center justify-between gap-3">
+          <label className="text-xs text-text-dim w-16 shrink-0">时长(帧)</label>
+          <input
+            type="number"
+            min={1}
+            className={`${inputCls} w-20`}
+            value={trDuration}
+            onChange={e => setTrDuration(Number(e.target.value))}
+            onBlur={() => {
+              if (trDuration >= 1 && trDuration !== transition.duration_frames) {
+                onUpdateTransition?.(transition.id, { duration_frames: trDuration });
+              }
+            }}
+            onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+          />
+        </div>
+
+        {/* from → to 片段名（只读） */}
+        <div className="px-4 py-2 border-t border-border text-xs space-y-1.5">
+          <div className="flex justify-between gap-2">
+            <span className="text-text-dim shrink-0">入片段</span>
+            <span className="text-text font-medium truncate">{fromClipName ?? transition.from_item_id.slice(0, 8)}</span>
+          </div>
+          <div className="flex justify-between gap-2">
+            <span className="text-text-dim shrink-0">出片段</span>
+            <span className="text-text font-medium truncate">{toClipName ?? transition.to_item_id.slice(0, 8)}</span>
+          </div>
+        </div>
+
+        {/* 删除 */}
+        <div className="px-4 py-3 border-t border-border mt-auto">
+          <button
+            onClick={() => {
+              if (window.confirm(`删除 ${transition.type} 转场？`)) {
+                onDeleteTransition?.(transition.id);
+              }
+            }}
+            className="w-full py-1.5 rounded text-xs font-medium border border-danger/40 text-danger hover:bg-danger/10"
+          >
+            🗑️ 删除转场
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // ── 无选中 → 项目概览 ──
   if (!clip) {
     return (
-      <div style={{ width }} className="shrink-0 border-l border-border bg-panel flex flex-col overflow-y-auto">
+      <div style={{ width, position: "relative" }} className="shrink-0 border-l border-border bg-panel flex flex-col overflow-y-auto">
+        {/* R7: 4px 拖拽条 */}
+        <div
+          onMouseDown={handleResizeMouseDown}
+          style={{
+            position: "absolute", left: 0, top: 0, bottom: 0, width: 4,
+            cursor: "col-resize", zIndex: 20,
+            background: resizing ? "#f59e0b" : "transparent",
+            transition: "background 0.15s",
+          }}
+          onMouseEnter={e => { if (!resizing) e.currentTarget.style.background = "#f59e0b60"; }}
+          onMouseLeave={e => { if (!resizing) e.currentTarget.style.background = "transparent"; }}
+        />
         <div className="px-4 py-3 border-b border-border text-xs font-semibold text-text-dim uppercase tracking-wider">
           项目信息
         </div>
@@ -133,7 +281,19 @@ export default function InspectorPanel({
   const dotCls = TRACK_DOT[clip.track] ?? "bg-text-dim";
 
   return (
-    <div style={{ width }} className="shrink-0 border-l border-border bg-panel flex flex-col overflow-y-auto">
+    <div style={{ width, position: "relative" }} className="shrink-0 border-l border-border bg-panel flex flex-col overflow-y-auto">
+      {/* R7: 4px 拖拽条 */}
+      <div
+        onMouseDown={handleResizeMouseDown}
+        style={{
+          position: "absolute", left: 0, top: 0, bottom: 0, width: 4,
+          cursor: "col-resize", zIndex: 20,
+          background: resizing ? "#f59e0b" : "transparent",
+          transition: "background 0.15s",
+        }}
+        onMouseEnter={e => { if (!resizing) e.currentTarget.style.background = "#f59e0b60"; }}
+        onMouseLeave={e => { if (!resizing) e.currentTarget.style.background = "transparent"; }}
+      />
       {/* 标题栏 */}
       <div className="px-4 py-3 border-b border-border flex items-center gap-2">
         <span className="text-sm font-semibold text-text truncate flex-1">{clip.name}</span>

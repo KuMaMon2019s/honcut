@@ -245,6 +245,7 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
   const handleContextMenu = useCallback((e: React.MouseEvent, clip: ClipData) => {
     e.preventDefault();
     setSelectedClipId(clip.id);
+    setSelectedTransitionId(null);
     setContextMenu({ x: e.clientX, y: e.clientY, clip });
   }, []);
 
@@ -419,11 +420,39 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
     }
   }, [projectId, reloadTransitions, showToast]);
 
+  // Inspector 编辑转场（类型立即生效 / 时长 blur 提交）
+  const handleUpdateTransition = useCallback(async (transitionId: string, body: { type?: string; duration_frames?: number }) => {
+    try {
+      await api.updateTransition(projectId, transitionId, body);
+      reloadTransitions();
+    } catch (e) {
+      showToast("❌ 更新转场失败: " + (e as Error).message);
+    }
+  }, [projectId, reloadTransitions, showToast]);
+
+  const handleDeleteTransition = useCallback(async (transitionId: string) => {
+    try {
+      await api.deleteTransition(projectId, transitionId);
+      setSelectedTransitionId(null);
+      showToast("🗑️ 已删除转场");
+      reloadTransitions();
+    } catch (e) {
+      showToast("❌ 删除转场失败: " + (e as Error).message);
+    }
+  }, [projectId, reloadTransitions, showToast]);
+
   // 跨轨拖拽高亮：目标轨道（排除片段原轨道）
   const draggedClip = dragInfo ? clipDataItems.find(c => c.id === dragInfo.clipId) : undefined;
   const dropTargetTrack = dragInfo && draggedClip && dragInfo.targetTrack !== draggedClip.track
     ? dragInfo.targetTrack
     : null;
+
+  // ── 选中的转场 → Inspector 属性面板 ──
+  const selectedTransition = selectedTransitionId
+    ? transitions.find(t => t.id === selectedTransitionId) ?? null
+    : null;
+  const trFromClip = selectedTransition ? clips.find(c => c.id === selectedTransition.from_item_id) : undefined;
+  const trToClip = selectedTransition ? clips.find(c => c.id === selectedTransition.to_item_id) : undefined;
 
   const zoomIn = () => setZoomIdx(i => Math.min(i + 1, ZOOM_LEVELS.length - 1));
   const zoomOut = () => setZoomIdx(i => Math.max(i - 1, 0));
@@ -572,16 +601,7 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
           onPlayingChange={setPlaying}
         />
 
-        {/* R9: 右侧拖拽条 */}
-        <ResizeHandle
-          size={inspectorWidth}
-          onResize={setInspectorWidth}
-          min={200}
-          max={450}
-          side="right"
-        />
-
-        {/* 右侧属性面板 */}
+        {/* 右侧属性面板（内置 4px 拖拽条） */}
         <InspectorPanel
           projectId={projectId}
           clip={selectedClip}
@@ -593,6 +613,13 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
           onClipUpdated={reloadClips}
           onDeselect={handleDeselect}
           width={inspectorWidth}
+          onResize={setInspectorWidth}
+          transition={selectedTransition}
+          fromClipName={trFromClip?.name}
+          toClipName={trToClip?.name}
+          onUpdateTransition={handleUpdateTransition}
+          onDeleteTransition={handleDeleteTransition}
+          onDeselectTransition={() => setSelectedTransitionId(null)}
         />
       </div>
 
@@ -631,6 +658,7 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
               onClipDragEnd={handleClipDragEnd}
               onClipDragMove={handleClipDragMove}
               onTransitionDrop={handleTransitionDrop}
+              onUpdateTransition={handleUpdateTransition}
               onContextMenu={handleContextMenu}
               dropTarget={dropTargetTrack === trackId}
               fps={fps}

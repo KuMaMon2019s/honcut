@@ -22,6 +22,7 @@ interface TrackLaneProps {
   onClipDragMove?: (clip: ClipData, clientX: number, clientY: number) => void;
   onContextMenu?: (e: React.MouseEvent, clip: ClipData) => void;
   onTransitionDrop?: (transitionType: string, fromClipId: string, toClipId: string) => void;
+  onUpdateTransition?: (transitionId: string, body: { type?: string; duration_frames?: number }) => void;
   /** 跨轨拖拽时：当前片段落入本轨道 → 高亮 */
   dropTarget?: boolean;
   fps: number;
@@ -35,7 +36,7 @@ const KIND_BADGES: Record<string, { icon: string; label: string }> = {
 
 export default function TrackLane({
   trackId, trackName, trackKind, clips, transitions = [], pxPerFrame, totalFrames,
-  color, selectedClipId, selectedTransitionId, onSelectClip, onSelectTransition, onClipDragEnd, onClipDragMove, onContextMenu, onTransitionDrop, dropTarget, fps, headerWidth,
+  color, selectedClipId, selectedTransitionId, onSelectClip, onSelectTransition, onClipDragEnd, onClipDragMove, onContextMenu, onTransitionDrop, onUpdateTransition, dropTarget, fps, headerWidth,
 }: TrackLaneProps) {
   const badge = KIND_BADGES[trackKind ?? "video"] ?? KIND_BADGES.video;
   const laneWidth = totalFrames * pxPerFrame;
@@ -156,8 +157,10 @@ export default function TrackLane({
               key={t.id}
               transition={t}
               x={x}
+              pxPerFrame={pxPerFrame}
               selected={t.id === selectedTransitionId}
               onSelect={onSelectTransition ?? (() => {})}
+              onUpdate={onUpdateTransition}
             />
           );
         })}

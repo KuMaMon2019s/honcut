@@ -1,6 +1,6 @@
-// PreviewPanel.tsx — 增强预览引擎
-// 功能：帧精确 seek、错误回退、clip 信息叠加层、播放状态指示
-// R7: 修复 <video> 黑屏 + 增加预览可靠性
+// PreviewPanel.tsx — Canvas 预览引擎
+// R7: 用 <canvas> + requestAnimationFrame + ctx.drawImage(video) 替代纯 <video>
+// 隐藏 video 元素负责解码，canvas 负责渲染，避免黑屏/闪烁问题
 // 快捷键: playing/playDirection 状态由父组件控制（useHotkeys 统一管理）
 
 import { useRef, useState, useEffect, useCallback } from "react";
@@ -26,7 +26,6 @@ function frameToTime(frames: number, fps: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-// 找到 playhead 所在的 clip（多个命中时取 track 排序最后的）
 function clipAtPlayhead(clips: Clip[], playhead: number): Clip | null {
   const hits = clips.filter(
     c => c.start_frame <= playhead && playhead < c.start_frame + c.duration_frames,
@@ -44,29 +43,57 @@ export default function PreviewPanel({
   onSelectClip, onPlayheadChange, onPlayingChange,
 }: PreviewPanelProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [videoError, setVideoError] = useState(false);
   const [videoReady, setVideoReady] = useState(false);
   const [showInfo, setShowInfo] = useState(true);
   const rafRef = useRef<number>(0);
+  const drawRafRef = useRef<number>(0);
   const lastSeekRef = useRef<number>(0);
 
   const activeClip = clipAtPlayhead(clips, playhead);
   const isVideo = activeClip?.kind === "video";
   const isAudio = activeClip?.kind === "audio";
 
-  // 切换 clip 时重置错误/就绪状态
+  // 切换 clip 时重置状态
   useEffect(() => {
     setVideoError(false);
     setVideoReady(false);
   }, [activeClip?.id]);
 
-  // 帧精确 seek — 只在偏差 > 0.1s 时纠正，避免频繁 seek 导致卡顿
+  // Canvas 渲染循环：持续把 video 帧绘制到 canvas
+  useEffect(() => {
+    if (!isVideo || videoError) {
+      if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current);
+      return;
+    }
+
+    const draw = () => {
+      const v = videoRef.current;
+      const c = canvasRef.current;
+      if (v && c && v.readyState >= 2) {
+        const ctx = c.getContext("2d");
+        if (ctx) {
+          // 匹配 canvas 尺寸到 video 原始尺寸（首次或尺寸变化时）
+          if (c.width !== v.videoWidth || c.height !== v.videoHeight) {
+            c.width = v.videoWidth || 640;
+            c.height = v.videoHeight || 360;
+          }
+          ctx.drawImage(v, 0, 0, c.width, c.height);
+        }
+      }
+      drawRafRef.current = requestAnimationFrame(draw);
+    };
+    drawRafRef.current = requestAnimationFrame(draw);
+    return () => { if (drawRafRef.current) cancelAnimationFrame(drawRafRef.current); };
+  }, [isVideo, videoError, activeClip?.id]);
+
+  // 帧精确 seek
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !activeClip || !isVideo || videoError) return;
     const targetSec = (playhead - activeClip.start_frame + activeClip.src_in_frame) / fps;
     const now = performance.now();
-    // 节流：100ms 内不重复 seek
     if (Math.abs(v.currentTime - targetSec) > 0.1 && now - lastSeekRef.current > 100) {
       lastSeekRef.current = now;
       v.currentTime = targetSec;
@@ -81,7 +108,7 @@ export default function PreviewPanel({
     else v.pause();
   }, [playing, isVideo, activeClip?.id, videoError]);
 
-  // rAF 播放循环（支持正向/反向穿梭）
+  // rAF 播放循环（正向/反向穿梭）
   useEffect(() => {
     if (!playing) {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -135,20 +162,25 @@ export default function PreviewPanel({
           </div>
         )}
 
-        {/* 视频预览 */}
+        {/* 视频预览：隐藏 video + 可见 canvas */}
         {activeClip && isVideo && activeClip.src && !videoError && (
           <>
             <video
               ref={videoRef}
               src={activeClip.src}
-              className="max-h-full w-full object-contain"
-              onClick={() => onSelectClip(activeClip)}
+              className="hidden"
               muted={false}
               onError={() => setVideoError(true)}
               onCanPlay={() => setVideoReady(true)}
               preload="auto"
+              crossOrigin="anonymous"
             />
-            {/* 加载中指示 */}
+            <canvas
+              ref={canvasRef}
+              onClick={() => onSelectClip(activeClip)}
+              className="max-h-full w-full object-contain cursor-pointer"
+              style={{ imageRendering: "auto" }}
+            />
             {!videoReady && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/60">
                 <span className="text-text-dim text-sm animate-pulse">加载视频…</span>
@@ -161,9 +193,7 @@ export default function PreviewPanel({
         {activeClip && isVideo && videoError && (
           <div className="flex flex-col items-center gap-3 p-6">
             <span className="text-3xl">⚠️</span>
-            <span className="text-text-dim text-sm text-center">
-              视频加载失败
-            </span>
+            <span className="text-text-dim text-sm text-center">视频加载失败</span>
             <span className="text-text-dim/60 text-xs text-center max-w-[200px] truncate">
               {activeClip.src || activeClip.name}
             </span>
@@ -230,14 +260,12 @@ export default function PreviewPanel({
         </button>
         <button className={btnCls} onClick={() => stepFrame(1)} title="前进1帧 (→)">⏭</button>
 
-        {/* JKL 穿梭指示 */}
         {playing && (
           <span className="text-[10px] text-accent font-mono ml-1">
             {playDirection === 1 ? "L" : "J"}
           </span>
         )}
 
-        {/* 信息叠加层开关 */}
         <button
           className={`${btnCls} ml-2 ${showInfo ? "text-accent" : ""}`}
           onClick={() => setShowInfo(v => !v)}
