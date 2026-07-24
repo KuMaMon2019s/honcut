@@ -12,12 +12,15 @@ import Ruler from "./components/Ruler";
 import TrackLane from "./components/TrackLane";
 import ResizeHandle from "./components/ResizeHandle";
 import ContextMenu from "./components/ContextMenu";
+import MCPCommandPalette from "./components/MCPCommandPalette";
+import ToolParamDialog from "./components/ToolParamDialog";
 import AddTrackButton from "./components/AddTrackButton";
 import { type ClipData } from "./components/ClipBlock";
 import { useProject, useClips, useTransitions, useTimelines, useMarkers, useMarkerActions, useTracks, useTrackActions } from "./api/hooks";
 import { api, type Clip as ApiClip, type Transition as ApiTransition, type Marker, type Track as ApiTrack } from "./api/client";
 import { useEditorStore } from "./store/editorStore";
 import { useHotkeys } from "./hooks/useHotkeys";
+import { fetchTools, type ToolInfo } from "./mcp/tools";
 import { collectSnapPoints, snapToFrame } from "./utils/snapping";
 
 // ── 工具 ──
@@ -94,6 +97,10 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
   // ── 右键菜单状态 ──
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; clip: ClipData } | null>(null);
   const [markerMenu, setMarkerMenu] = useState<{ x: number; y: number; marker: Marker } | null>(null);
+
+  // ── P3: MCP 命令面板 + 工具对话框状态 ──
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [toolDialog, setToolDialog] = useState<{ tool: ToolInfo; clipId?: string | null } | null>(null);
 
   // ── P6: 吸附 + 标记状态 ──
   const [snapEnabled, setSnapEnabled] = useState(true);
@@ -310,6 +317,33 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
       showToast("❌ 添加转场失败: " + (e as Error).message);
     }
   }, [contextMenu, clipDataItems, execute, reloadTransitions, showToast]);
+
+  // ── P3: 打开 MCP 工具参数对话框（右键菜单「更多操作」）──
+  const handleOpenTool = useCallback(async (toolName: string, clipId?: string | null) => {
+    try {
+      const tools = await fetchTools();
+      const tool = tools.find(t => t.name === toolName);
+      if (tool) {
+        setToolDialog({ tool, clipId: clipId ?? selectedClipId });
+      } else {
+        showToast(`⚠️ 未找到工具: ${toolName}`);
+      }
+    } catch (e) {
+      showToast("❌ 加载工具列表失败: " + (e as Error).message);
+    }
+  }, [selectedClipId, showToast]);
+
+  // ── P3: ⌘K / Ctrl+K 打开 MCP 命令面板 ──
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen(prev => !prev);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   // ── P6: 标记操作 ──
   const handleAddMarker = useCallback(() => {
@@ -910,6 +944,33 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
         />
       )}
 
+      {/* P3: MCP 命令面板 (⌘K / Ctrl+K) */}
+      {paletteOpen && (
+        <MCPCommandPalette
+          projectId={projectId}
+          clipId={selectedClipId}
+          onClose={() => setPaletteOpen(false)}
+          onResult={(success, msg) => {
+            showToast(success ? "✅ " + msg.slice(0, 80) : "❌ " + msg.slice(0, 80));
+            if (success) { reloadClips(); reloadTransitions(); }
+          }}
+        />
+      )}
+
+      {/* P3: MCP 工具参数对话框（右键菜单 → 更多操作） */}
+      {toolDialog && (
+        <ToolParamDialog
+          tool={toolDialog.tool}
+          projectId={projectId}
+          clipId={toolDialog.clipId}
+          onClose={() => setToolDialog(null)}
+          onResult={(success) => {
+            showToast(success ? "✅ 工具执行成功" : "❌ 工具执行失败");
+            if (success) { reloadClips(); reloadTransitions(); }
+          }}
+        />
+      )}
+
       {/* 片段右键菜单 */}
       {contextMenu && (
         <ContextMenu
@@ -923,7 +984,7 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
           onDuplicate={handleDuplicate}
           onDelete={handleDelete}
           onAddTransition={handleAddTransition}
-          onOpenTool={() => {}}
+          onOpenTool={(toolName) => handleOpenTool(toolName, contextMenu.clip.id)}
           onClose={() => setContextMenu(null)}
         />
       )}
@@ -1008,6 +1069,7 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
         <span>Del 删除</span>
         <span>M 标记</span>
         <span>S 吸附</span>
+        <span>⌘K 工具面板</span>
       </div>
     </div>
   );
