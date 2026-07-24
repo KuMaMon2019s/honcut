@@ -1,0 +1,21 @@
+{
+  "schema": "atris.task_projection.v1",
+  "generated_at": "2026-07-24T01:05:35.520Z",
+  "workspace_root": "/Users/soda/Documents/honcut",
+  "surface": {
+    "compact": true,
+    "full_task_count": 0,
+    "visible_task_count": 0,
+    "hidden_done_count": 0,
+    "done_limit": 8,
+    "event_limit": 8,
+    "message_limit": 6,
+    "full_ledger_command": "atris task events --all"
+  },
+  "tasks": [],
+  "goals": {
+    "source_path": null,
+    "items": []
+  },
+  "streams": []
+}

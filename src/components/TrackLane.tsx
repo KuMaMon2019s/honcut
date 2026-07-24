@@ -185,8 +185,10 @@ export default function TrackLane({
           minWidth: laneWidth,
           background: dropTarget ? "#1d1d1d" : "#161616",
           borderRadius: 3,
-          border: dropTarget ? `1px solid ${color}` : "1px solid #252525",
-          transition: "border-color 0.1s, background 0.1s",
+          border: "1px solid #252525",
+          // 跨轨拖拽目标高亮：2px accent/50 内环（box-shadow 代替 border 加宽，避免布局抖动）
+          boxShadow: dropTarget ? "inset 0 0 0 2px rgba(var(--cc-accent-rgb), 0.5)" : "none",
+          transition: "background 0.1s, box-shadow 0.1s",
         }}
         onDragOver={e => {
           if (e.dataTransfer.types.includes("application/x-transition-type")) {

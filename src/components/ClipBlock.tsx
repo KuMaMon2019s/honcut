@@ -3,7 +3,7 @@
 
 import { useRef, useCallback, useState } from "react";
 import ThumbnailStrip from "./ThumbnailStrip";
-import { snapClipStart } from "../utils/snapping";
+import { useTimelineDrag } from "../hooks/useTimelineDrag";
 
 export interface ClipData {
   id: string;
@@ -60,9 +60,19 @@ export default function ClipBlock({ clip, pxPerFrame, color, selected, onSelect,
   // ── 悬停状态 ──
   const [hovered, setHovered] = useState(false);
 
-  // ── 拖拽移动 ──
-  const dragState = useRef<{ startX: number; origFrame: number; dragging: boolean } | null>(null);
-  const [drag, setDrag] = useState<{ offsetX: number; mouseX: number; mouseY: number } | null>(null);
+  // ── 拖拽移动（Pointer Events + setPointerCapture，状态机在 useTimelineDrag）──
+  const { drag, startDrag, onPointerMove, onPointerUp } = useTimelineDrag({
+    pxPerFrame,
+    startFrame: clip.startFrame,
+    durationInFrames: clip.durationInFrames,
+    selected,
+    onSelect: () => onSelect(clip),
+    snapEnabled,
+    snapPoints,
+    onSnapLine,
+    onDragMove: (cx, cy, f) => onDragMove?.(clip, cx, cy, f),
+    onDragEnd: (f) => onDragEnd?.(clip.id, f),
+  });
 
   // ── 修剪拖拽 ──
   const trimState = useRef<{
@@ -81,17 +91,15 @@ export default function ClipBlock({ clip, pxPerFrame, color, selected, onSelect,
     mouseY: number;
   } | null>(null);
 
-  const cbRef = useRef({ onDragEnd, onDragMove, onTrimEnd, onSnapLine });
-  cbRef.current = { onDragEnd, onDragMove, onTrimEnd, onSnapLine };
-
-  const snapRef = useRef({ snapEnabled, snapPoints });
-  snapRef.current = { snapEnabled, snapPoints };
+  const cbRef = useRef({ onTrimEnd });
+  cbRef.current = { onTrimEnd };
 
   // ── 修剪手柄 mousedown ──
   const handleTrimMouseDown = useCallback((e: React.MouseEvent, side: TrimSide) => {
     e.preventDefault();
     e.stopPropagation(); // 不触发整块拖拽
-    onSelect(clip);
+    // 幂等选中：已选中的片段按下时不反选（否则拖拽/修剪中途会掉选中态）
+    if (!selected) onSelect(clip);
 
     trimState.current = {
       side,
@@ -151,68 +159,9 @@ export default function ClipBlock({ clip, pxPerFrame, color, selected, onSelect,
 
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
-  }, [clip, onSelect, pxPerFrame]);
+  }, [clip, onSelect, pxPerFrame, selected]);
 
-  // ── 整块拖拽移动 ──
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    onSelect(clip);
-    dragState.current = { startX: e.clientX, origFrame: clip.startFrame, dragging: false };
-
-    const handleMouseMove = (ev: MouseEvent) => {
-      const st = dragState.current;
-      if (!st) return;
-      const dx = ev.clientX - st.startX;
-      if (!st.dragging && Math.abs(dx) > 3) {
-        st.dragging = true;
-        document.body.style.cursor = "grabbing";
-      }
-      if (st.dragging) {
-        const { snapEnabled: se, snapPoints: sp } = snapRef.current;
-        let visualDx = dx;
-        if (se && sp && sp.length > 0) {
-          const rawFrame = st.origFrame + Math.round(dx / pxPerFrame);
-          const threshold = 8 / pxPerFrame;
-          const result = snapClipStart(Math.max(0, rawFrame), clip.durationInFrames, sp, threshold);
-          if (result.snapped) {
-            visualDx = (result.frame - st.origFrame) * pxPerFrame;
-            cbRef.current.onSnapLine?.(result.snapTarget);
-          } else {
-            cbRef.current.onSnapLine?.(null);
-          }
-        }
-        setDrag({ offsetX: visualDx, mouseX: ev.clientX, mouseY: ev.clientY });
-        const projectedFrame = Math.max(0, st.origFrame + Math.round(visualDx / pxPerFrame));
-        cbRef.current.onDragMove?.(clip, ev.clientX, ev.clientY, projectedFrame);
-      }
-    };
-
-    const handleMouseUp = (ev: MouseEvent) => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-      const st = dragState.current;
-      dragState.current = null;
-      setDrag(null);
-      document.body.style.cursor = "";
-      cbRef.current.onSnapLine?.(null);
-      if (!st || !st.dragging) return;
-      const { snapEnabled: se, snapPoints: sp } = snapRef.current;
-      let newFrame = Math.max(0, st.origFrame + Math.round((ev.clientX - st.startX) / pxPerFrame));
-      if (se && sp && sp.length > 0) {
-        const threshold = 8 / pxPerFrame;
-        const result = snapClipStart(newFrame, clip.durationInFrames, sp, threshold);
-        newFrame = Math.max(0, result.frame);
-      }
-      cbRef.current.onDragEnd?.(clip.id, newFrame);
-    };
-
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-  }, [clip, onSelect, pxPerFrame]);
-
-  const dragFrame = drag ? Math.max(0, clip.startFrame + Math.round(drag.offsetX / pxPerFrame)) : null;
+  const dragFrame = drag ? Math.max(0, drag.baseStart + drag.deltaF) : null;
 
   // 修剪中的显示值
   const trimSrcIn = trim ? trim.srcIn : clip.srcInFrame;
@@ -230,7 +179,9 @@ export default function ClipBlock({ clip, pxPerFrame, color, selected, onSelect,
     <>
     <div
       title={`${clip.name}\n${frameToTime(clip.startFrame, fps)} → ${frameToTime(clip.startFrame + clip.durationInFrames, fps)}\n${clip.durationInFrames}f · ${clip.kind}`}
-      onMouseDown={handleMouseDown}
+      onPointerDown={startDrag}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onContextMenu={(e) => {
@@ -259,7 +210,7 @@ export default function ClipBlock({ clip, pxPerFrame, color, selected, onSelect,
         whiteSpace: "nowrap",
         textOverflow: "ellipsis",
         boxSizing: "border-box",
-        transform: drag ? `translateX(${drag.offsetX}px)` : undefined,
+        transform: drag ? `translateX(${drag.deltaF * pxPerFrame}px)` : undefined,
         opacity: drag ? 0.7 : 1,
         transition: isTrimming ? "none" : "background 0.15s, border-color 0.15s",
         zIndex: drag ? 10 : selected ? 5 : 1,
@@ -321,6 +272,7 @@ export default function ClipBlock({ clip, pxPerFrame, color, selected, onSelect,
       {/* ── 左手柄 ── */}
       {showHandles && (
         <div
+          onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => handleTrimMouseDown(e, "left")}
           style={{
             position: "absolute",
@@ -347,6 +299,7 @@ export default function ClipBlock({ clip, pxPerFrame, color, selected, onSelect,
       {/* ── 右手柄 ── */}
       {showHandles && (
         <div
+          onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => handleTrimMouseDown(e, "right")}
           style={{
             position: "absolute",

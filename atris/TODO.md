@@ -1,24 +1,23 @@
 # TODO.md
 
-> Working task queue for this project. Target state = 0.
-> Note: Daily tasks live in `atris/logs/YYYY/YYYY-MM-DD.md`
-
----
+> Regenerated from durable Atris task state. Do not treat this file as truth.
 
 ## Backlog
 
-(See today's journal)
-
----
+(Empty)
 
 ## In Progress
 
-(See today's journal)
+(Empty)
 
----
+## Review
+
+(Empty)
+
+## Blocked
+
+(Empty)
 
 ## Completed
 
-(Validator deletes after verification)
-
----
+(Empty)
