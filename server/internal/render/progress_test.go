@@ -26,7 +26,7 @@ func TestProgressManager_CreateAndGetJob(t *testing.T) {
 	pipeline := &Pipeline{FPS: 30, Store: mockStore}
 	pm := NewProgressManager(pipeline)
 
-	job := pm.CreateJob("test-001", "proj-001")
+	job := pm.CreateJob("test-001", "proj-001", DefaultRenderSettings())
 	if job.ID != "test-001" {
 		t.Errorf("expected job ID test-001, got %s", job.ID)
 	}
@@ -50,7 +50,7 @@ func TestProgressManager_UpdateJob(t *testing.T) {
 	mockStore := &MockTimelineStore{}
 	pipeline := &Pipeline{FPS: 30, Store: mockStore}
 	pm := NewProgressManager(pipeline)
-	pm.CreateJob("test-002", "proj-001")
+	pm.CreateJob("test-002", "proj-001", DefaultRenderSettings())
 
 	err := pm.UpdateJob("test-002", StatusRunning, 50, "", "")
 	if err != nil {
@@ -95,7 +95,7 @@ func TestProgressManager_CancelJob(t *testing.T) {
 	}
 	pipeline := &Pipeline{FPS: 30, Store: mockStore}
 	pm := NewProgressManager(pipeline)
-	pm.CreateJob("test-003", "proj-001")
+	pm.CreateJob("test-003", "proj-001", DefaultRenderSettings())
 
 	// Start the job
 	outputDir := t.TempDir()
@@ -139,9 +139,9 @@ func TestProgressManager_ListJobs(t *testing.T) {
 	pipeline := &Pipeline{FPS: 30, Store: mockStore}
 	pm := NewProgressManager(pipeline)
 
-	pm.CreateJob("job-1", "proj-A")
-	pm.CreateJob("job-2", "proj-A")
-	pm.CreateJob("job-3", "proj-B")
+	pm.CreateJob("job-1", "proj-A", DefaultRenderSettings())
+	pm.CreateJob("job-2", "proj-A", DefaultRenderSettings())
+	pm.CreateJob("job-3", "proj-B", DefaultRenderSettings())
 
 	jobsA := pm.ListJobs("proj-A")
 	if len(jobsA) != 2 {
@@ -159,10 +159,10 @@ func TestProgressManager_CleanupOldJobs(t *testing.T) {
 	pipeline := &Pipeline{FPS: 30, Store: mockStore}
 	pm := NewProgressManager(pipeline)
 
-	job1 := pm.CreateJob("old-job", "proj-001")
+	job1 := pm.CreateJob("old-job", "proj-001", DefaultRenderSettings())
 	job1.CompletedAt = timePtr(time.Now().Add(-2 * time.Hour))
 
-	job2 := pm.CreateJob("new-job", "proj-001")
+	job2 := pm.CreateJob("new-job", "proj-001", DefaultRenderSettings())
 	job2.CompletedAt = timePtr(time.Now())
 
 	pm.CleanupOldJobs(1 * time.Hour)

@@ -67,6 +67,15 @@ export interface DesignStyle {
   created_at: string;
 }
 
+export interface Marker {
+  id: string;
+  project_id: string;
+  frame: number;
+  label: string;
+  color: string;
+  created_at: string;
+}
+
 export interface Asset {
   id: string;
   project_id: string;
@@ -84,6 +93,16 @@ export interface Template {
   name: string;
   description: string;
   category: string;
+}
+
+export interface RenderSettings {
+  codec?: string;    // h264 | h265 | vp9 | av1
+  width?: number;    // 0 = source
+  height?: number;   // 0 = source
+  fps?: number;      // default 30
+  crf?: number;      // 0-51, default 23
+  preset?: string;   // ultrafast..veryslow, default medium
+  audio_bitrate?: string; // e.g. "128k"
 }
 
 export interface RenderStatus {
@@ -239,6 +258,18 @@ export interface UpdateDesignStyleBody {
   name?: string;
   colors?: Record<string, unknown>;
   fonts?: Record<string, unknown>;
+}
+
+export interface CreateMarkerBody {
+  frame: number;
+  label?: string;
+  color?: string;
+}
+
+export interface UpdateMarkerBody {
+  frame?: number;
+  label?: string;
+  color?: string;
 }
 
 // ── 工具函数 ────────────────────────────────────────────────────────────
@@ -403,6 +434,24 @@ class HoncutClient {
     return request<void>(`/api/projects/${enc(projectId)}/design-styles/${enc(styleId)}`, { method: "DELETE" });
   }
 
+  // ── Markers ──
+
+  listMarkers(projectId: string): Promise<Marker[]> {
+    return request<Marker[]>(`/api/projects/${enc(projectId)}/markers`);
+  }
+
+  createMarker(projectId: string, body: CreateMarkerBody): Promise<Marker> {
+    return request<Marker>(`/api/projects/${enc(projectId)}/markers`, { method: "POST", ...jsonBody(body) });
+  }
+
+  updateMarker(projectId: string, markerId: string, body: UpdateMarkerBody): Promise<Marker> {
+    return request<Marker>(`/api/projects/${enc(projectId)}/markers/${enc(markerId)}`, { method: "PATCH", ...jsonBody(body) });
+  }
+
+  deleteMarker(projectId: string, markerId: string): Promise<void> {
+    return request<void>(`/api/projects/${enc(projectId)}/markers/${enc(markerId)}`, { method: "DELETE" });
+  }
+
   // ── Assets ──
 
   listAssets(projectId: string): Promise<Asset[]> {
@@ -450,10 +499,10 @@ class HoncutClient {
 
   // ── Render ──
 
-  startRender(jobId: string, projectId: string): Promise<RenderStatus> {
+  startRender(jobId: string, projectId: string, settings?: RenderSettings): Promise<RenderStatus> {
     return request<RenderStatus>(`/api/render/${enc(jobId)}`, {
       method: "POST",
-      ...jsonBody({ project_id: projectId }),
+      ...jsonBody({ project_id: projectId, settings: settings ?? {} }),
     });
   }
 

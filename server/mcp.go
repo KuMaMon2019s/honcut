@@ -584,6 +584,12 @@ func (s *MCPServer) ListTools() []MCPTool {
 					"project_id": map[string]interface{}{"type": "string", "description": "Project ID"},
 					"format":     map[string]interface{}{"type": "string", "enum": []string{"mp4", "gif", "mp3", "wav", "jpg", "png"}, "description": "Output format (default mp4)"},
 					"quality":    map[string]interface{}{"type": "number", "description": "Quality 1-100 (default 80)"},
+					"codec":      map[string]interface{}{"type": "string", "enum": []string{"h264", "h265", "vp9", "av1"}, "description": "Video codec (default h264)"},
+					"width":      map[string]interface{}{"type": "number", "description": "Output width in pixels (0 = source)"},
+					"height":     map[string]interface{}{"type": "number", "description": "Output height in pixels (0 = source)"},
+					"fps":        map[string]interface{}{"type": "number", "description": "Output framerate (default 30)"},
+					"crf":        map[string]interface{}{"type": "number", "description": "Quality factor 0-51, lower = better (default 23)"},
+					"preset":     map[string]interface{}{"type": "string", "enum": []string{"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"}, "description": "Encoding speed preset (default medium)"},
 				},
 				"required": []string{"project_id"},
 			},
@@ -1668,7 +1674,29 @@ func (s *MCPServer) submitRenderJob(params map[string]interface{}) (interface{},
 
 	// Generate job ID and create the job
 	jobID := "render_" + uuid.New().String()[:8]
-	job := s.pm.CreateJob(jobID, projectID)
+
+	// Parse optional render settings from params
+	settings := render.DefaultRenderSettings()
+	if codec, ok := params["codec"].(string); ok && codec != "" {
+		settings.Codec = codec
+	}
+	if w, ok := params["width"].(float64); ok && w > 0 {
+		settings.Width = int(w)
+	}
+	if h, ok := params["height"].(float64); ok && h > 0 {
+		settings.Height = int(h)
+	}
+	if fps, ok := params["fps"].(float64); ok && fps > 0 {
+		settings.FPS = int(fps)
+	}
+	if crf, ok := params["crf"].(float64); ok && crf > 0 {
+		settings.CRF = int(crf)
+	}
+	if preset, ok := params["preset"].(string); ok && preset != "" {
+		settings.Preset = preset
+	}
+
+	job := s.pm.CreateJob(jobID, projectID, settings)
 
 	// Start the real render
 	if err := s.pm.StartRender(jobID, s.outputDir); err != nil {

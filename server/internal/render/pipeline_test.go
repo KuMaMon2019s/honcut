@@ -330,7 +330,7 @@ func TestProgressManager_StartRender(t *testing.T) {
 	}
 
 	pm := NewProgressManager(pipeline)
-	pm.CreateJob("pm-test-1", "proj-pm")
+	pm.CreateJob("pm-test-1", "proj-pm", DefaultRenderSettings())
 
 	if err := pm.StartRender("pm-test-1", outputDir); err != nil {
 		t.Fatalf("StartRender failed: %v", err)

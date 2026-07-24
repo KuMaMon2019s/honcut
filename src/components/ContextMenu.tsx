@@ -1,5 +1,6 @@
-// ContextMenu.tsx — 时间线片段右键菜单
-// 在右键位置弹出的暗色菜单：分割 / 复制片段 / 添加转场（子菜单）/ 删除片段
+// ContextMenu.tsx — 时间线片段右键菜单（增强版）
+// 原有操作：分割 / 复制 / 添加转场 / 删除
+// 新增：「更多操作」子菜单 → 打开 MCP 工具参数对话框（trim/move/timing/props）
 
 import { useEffect, useRef, useState } from "react";
 
@@ -8,26 +9,36 @@ interface ContextMenuProps {
   y: number;
   clipId: string;
   clipName: string;
-  canSplit: boolean;          // 播放头是否在片段范围内
-  canAddTransition: boolean;  // 同轨道是否有下一个片段
+  canSplit: boolean;
+  canAddTransition: boolean;
   onSplit: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
   onAddTransition: (type: string) => void;
+  /** 打开 MCP 工具参数对话框（新增） */
+  onOpenTool: (toolName: string) => void;
   onClose: () => void;
 }
 
 const TRANSITION_TYPES = ["Dissolve", "Wipe", "Fade", "Slide", "Zoom Blur"];
 
-const MENU_WIDTH = 208;
-const MENU_HEIGHT = 190;
-const SUBMENU_WIDTH = 132;
+// 「更多操作」子菜单项 → 对应 MCP 工具名
+const MORE_ACTIONS: Array<{ icon: string; label: string; tool: string }> = [
+  { icon: "✂️", label: "裁剪片段", tool: "trim_clip" },
+  { icon: "🔀", label: "移动片段", tool: "move_item" },
+  { icon: "⏱️", label: "调整时间", tool: "set_item_timing" },
+  { icon: "🔧", label: "更新属性", tool: "update_item_props" },
+];
+
+const MENU_WIDTH = 216;
+const MENU_HEIGHT = 240;
+const SUBMENU_WIDTH = 148;
 
 export default function ContextMenu({
   x, y, clipId, clipName, canSplit, canAddTransition,
-  onSplit, onDuplicate, onDelete, onAddTransition, onClose,
+  onSplit, onDuplicate, onDelete, onAddTransition, onOpenTool, onClose,
 }: ContextMenuProps) {
-  const [submenuOpen, setSubmenuOpen] = useState(false);
+  const [submenuOpen, setSubmenuOpen] = useState<string | null>(null);
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -47,7 +58,9 @@ export default function ContextMenu({
   const menuY = Math.max(4, Math.min(y, window.innerHeight - MENU_HEIGHT - 8));
   const submenuOnLeft = menuX + MENU_WIDTH + SUBMENU_WIDTH + 8 > window.innerWidth;
 
-  const itemStyle = (opts: { disabled?: boolean; danger?: boolean; hovered?: boolean }): React.CSSProperties => ({
+  const itemStyle = (opts: {
+    disabled?: boolean; danger?: boolean; hovered?: boolean;
+  }): React.CSSProperties => ({
     display: "flex",
     alignItems: "center",
     gap: 8,
@@ -66,6 +79,25 @@ export default function ContextMenu({
     fontSize: 10,
     color: "#777",
   };
+
+  // 子菜单渲染
+  const renderSubmenu = (items: React.ReactNode) => (
+    <div style={{
+      position: "absolute",
+      top: -5,
+      left: submenuOnLeft ? undefined : "100%",
+      right: submenuOnLeft ? "100%" : undefined,
+      width: SUBMENU_WIDTH,
+      background: "#1e1e1e",
+      border: "1px solid #333",
+      borderRadius: 6,
+      boxShadow: "0 8px 24px rgba(0,0,0,0.55)",
+      padding: "4px 0",
+      zIndex: 1,
+    }}>
+      {items}
+    </div>
+  );
 
   return (
     <div
@@ -100,7 +132,7 @@ export default function ContextMenu({
       {/* ✂️ 分割 */}
       <div
         style={itemStyle({ disabled: !canSplit, hovered: hoveredItem === "split" })}
-        onMouseEnter={() => setHoveredItem("split")}
+        onMouseEnter={() => { setHoveredItem("split"); setSubmenuOpen(null); }}
         onMouseLeave={() => setHoveredItem(null)}
         onClick={() => { if (!canSplit) return; onClose(); onSplit(); }}
       >
@@ -112,13 +144,13 @@ export default function ContextMenu({
       {/* 📋 复制片段 */}
       <div
         style={itemStyle({ hovered: hoveredItem === "duplicate" })}
-        onMouseEnter={() => setHoveredItem("duplicate")}
+        onMouseEnter={() => { setHoveredItem("duplicate"); setSubmenuOpen(null); }}
         onMouseLeave={() => setHoveredItem(null)}
         onClick={() => { onClose(); onDuplicate(); }}
       >
         <span>📋</span>
         <span>复制片段</span>
-        <span style={shortcutStyle}>Ctrl+D</span>
+        <span style={shortcutStyle}>⌘D</span>
       </div>
 
       <div style={{ height: 1, background: "#333", margin: "4px 0" }} />
@@ -127,39 +159,62 @@ export default function ContextMenu({
       <div
         style={{
           position: "relative",
-          ...itemStyle({ disabled: !canAddTransition, hovered: hoveredItem === "transition" || submenuOpen }),
+          ...itemStyle({
+            disabled: !canAddTransition,
+            hovered: hoveredItem === "transition" || submenuOpen === "transition",
+          }),
         }}
-        onMouseEnter={() => { setHoveredItem("transition"); if (canAddTransition) setSubmenuOpen(true); }}
-        onMouseLeave={() => { setHoveredItem(null); setSubmenuOpen(false); }}
+        onMouseEnter={() => {
+          setHoveredItem("transition");
+          if (canAddTransition) setSubmenuOpen("transition");
+        }}
+        onMouseLeave={() => { setHoveredItem(null); setSubmenuOpen(null); }}
       >
         <span>🔗</span>
         <span>添加转场</span>
         <span style={shortcutStyle}>▸</span>
 
-        {submenuOpen && canAddTransition && (
-          <div style={{
-            position: "absolute",
-            top: -5,
-            left: submenuOnLeft ? undefined : "100%",
-            right: submenuOnLeft ? "100%" : undefined,
-            width: SUBMENU_WIDTH,
-            background: "#1e1e1e",
-            border: "1px solid #333",
-            borderRadius: 6,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.55)",
-            padding: "4px 0",
-          }}>
-            {TRANSITION_TYPES.map(t => (
-              <div
-                key={t}
-                style={itemStyle({ hovered: hoveredItem === `tr:${t}` })}
-                onMouseEnter={() => setHoveredItem(`tr:${t}`)}
-                onClick={() => { onClose(); onAddTransition(t); }}
-              >
-                {t}
-              </div>
-            ))}
-          </div>
+        {submenuOpen === "transition" && canAddTransition && renderSubmenu(
+          TRANSITION_TYPES.map(t => (
+            <div
+              key={t}
+              style={itemStyle({ hovered: hoveredItem === `tr:${t}` })}
+              onMouseEnter={() => setHoveredItem(`tr:${t}`)}
+              onClick={() => { onClose(); onAddTransition(t); }}
+            >
+              {t}
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* 🔧 更多操作（hover 展开子菜单 → MCP 工具） */}
+      <div
+        style={{
+          position: "relative",
+          ...itemStyle({
+            hovered: hoveredItem === "more" || submenuOpen === "more",
+          }),
+        }}
+        onMouseEnter={() => { setHoveredItem("more"); setSubmenuOpen("more"); }}
+        onMouseLeave={() => { setHoveredItem(null); setSubmenuOpen(null); }}
+      >
+        <span>🔧</span>
+        <span>更多操作</span>
+        <span style={shortcutStyle}>▸</span>
+
+        {submenuOpen === "more" && renderSubmenu(
+          MORE_ACTIONS.map(a => (
+            <div
+              key={a.tool}
+              style={itemStyle({ hovered: hoveredItem === `more:${a.tool}` })}
+              onMouseEnter={() => setHoveredItem(`more:${a.tool}`)}
+              onClick={() => { onClose(); onOpenTool(a.tool); }}
+            >
+              <span>{a.icon}</span>
+              <span>{a.label}</span>
+            </div>
+          ))
         )}
       </div>
 
@@ -168,7 +223,7 @@ export default function ContextMenu({
       {/* 🗑️ 删除片段 */}
       <div
         style={itemStyle({ danger: true, hovered: hoveredItem === "delete" })}
-        onMouseEnter={() => setHoveredItem("delete")}
+        onMouseEnter={() => { setHoveredItem("delete"); setSubmenuOpen(null); }}
         onMouseLeave={() => setHoveredItem(null)}
         onClick={() => { onClose(); onDelete(); }}
       >

@@ -11,8 +11,10 @@ import {
   type Track,
   type DesignStyle,
   type Asset,
+  type Marker,
   type Template,
   type RenderStatus,
+  type RenderSettings,
   type ProviderStatus,
   type UploadResult,
   type StatusResponse,
@@ -33,6 +35,8 @@ import {
   type UpdateTrackBody,
   type CreateDesignStyleBody,
   type UpdateDesignStyleBody,
+  type CreateMarkerBody,
+  type UpdateMarkerBody,
 } from "./client";
 
 // ── 通用 fetch hook ─────────────────────────────────────────────────────
@@ -98,6 +102,10 @@ export function useTracks(projectId: string): FetchState<Track[]> {
 
 export function useDesignStyles(projectId: string): FetchState<DesignStyle[]> {
   return useFetch(() => api.listDesignStyles(projectId), [projectId]);
+}
+
+export function useMarkers(projectId: string): FetchState<Marker[]> {
+  return useFetch(() => api.listMarkers(projectId), [projectId]);
 }
 
 export function useAssets(projectId: string): FetchState<Asset[]> {
@@ -214,6 +222,13 @@ export function useDesignStyleActions(projectId: string) {
   return { create, update, remove };
 }
 
+export function useMarkerActions(projectId: string) {
+  const create = useCallback((body: CreateMarkerBody) => api.createMarker(projectId, body), [projectId]);
+  const update = useCallback((markerId: string, body: UpdateMarkerBody) => api.updateMarker(projectId, markerId, body), [projectId]);
+  const remove = useCallback((markerId: string) => api.deleteMarker(projectId, markerId), [projectId]);
+  return { create, update, remove };
+}
+
 export function useAssetActions(projectId: string) {
   const remove = useCallback((assetId: string) => api.deleteAsset(projectId, assetId), [projectId]);
   const rename = useCallback((assetId: string, name: string) => api.renameAsset(projectId, assetId, { name }), [projectId]);
@@ -244,10 +259,10 @@ export function useRender(projectId: string) {
   const [status, setStatus] = useState<RenderStatus | null>(null);
   const [downloading, setDownloading] = useState(false);
 
-  const start = useCallback(async (): Promise<string> => {
+  const start = useCallback(async (settings?: RenderSettings): Promise<string> => {
     const id = `render-${projectId}-${Date.now()}`;
     setJobId(id);
-    const result = await api.startRender(id, projectId);
+    const result = await api.startRender(id, projectId, settings);
     setStatus(result);
     return id;
   }, [projectId]);

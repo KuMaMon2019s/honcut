@@ -12,11 +12,13 @@ import Ruler from "./components/Ruler";
 import TrackLane from "./components/TrackLane";
 import ResizeHandle from "./components/ResizeHandle";
 import ContextMenu from "./components/ContextMenu";
+import AddTrackButton from "./components/AddTrackButton";
 import { type ClipData } from "./components/ClipBlock";
-import { useProject, useClips, useTransitions, useTimelines } from "./api/hooks";
-import { api, type Clip as ApiClip, type Transition as ApiTransition } from "./api/client";
-import { useUndo } from "./hooks/useUndo";
+import { useProject, useClips, useTransitions, useTimelines, useMarkers, useMarkerActions, useTracks, useTrackActions } from "./api/hooks";
+import { api, type Clip as ApiClip, type Transition as ApiTransition, type Marker, type Track as ApiTrack } from "./api/client";
+import { useEditorStore } from "./store/editorStore";
 import { useHotkeys } from "./hooks/useHotkeys";
+import { collectSnapPoints, snapToFrame } from "./utils/snapping";
 
 // ── 工具 ──
 
@@ -51,17 +53,10 @@ function mapClip(c: ApiClip): ClipData {
     track: c.track || "V1",
     startFrame: c.start_frame || 0,
     durationInFrames: c.duration_frames || 60,
+    srcInFrame: c.src_in_frame || 0,
     src: c.src || "",
     props,
   };
-}
-
-// 拖拽 undo 条目：记录片段移动前后的位置
-interface TimingUndoEntry {
-  type: "timing";
-  clipId: string;
-  before: { start_frame: number; track: string };
-  after: { start_frame: number; track: string };
 }
 
 // ── 组件 ──
@@ -72,6 +67,18 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
   const { data: rawClips, loading: clipsLoading, reload: reloadClips } = useClips(projectId);
   const { data: rawTransitions, loading: transitionsLoading, reload: reloadTransitions } = useTransitions(projectId);
   const { data: timelines } = useTimelines(projectId);
+  const { data: rawMarkers, reload: reloadMarkers } = useMarkers(projectId);
+  const markerActions = useMarkerActions(projectId);
+  const { data: rawTracks, reload: reloadTracks } = useTracks(projectId);
+  const trackActions = useTrackActions(projectId);
+
+  // ── P1: 命令模式编辑器状态（clips + undo/redo 栈）──
+  const { state: editorState, canUndo, canRedo, sync: syncEditor, execute, undo, redo } = useEditorStore(projectId);
+
+  // 外部数据变化（初始加载 / Inspector 编辑 / 导入）→ 同步到 editorStore，不影响 undo 栈
+  useEffect(() => {
+    if (Array.isArray(rawClips)) syncEditor(rawClips);
+  }, [rawClips, syncEditor]);
 
   // ── UI 状态 ──
   const [playhead, setPlayhead] = useState(0);
@@ -86,6 +93,14 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
 
   // ── 右键菜单状态 ──
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; clip: ClipData } | null>(null);
+  const [markerMenu, setMarkerMenu] = useState<{ x: number; y: number; marker: Marker } | null>(null);
+
+  // ── P6: 吸附 + 标记状态 ──
+  const [snapEnabled, setSnapEnabled] = useState(true);
+  const [snapLine, setSnapLine] = useState<number | null>(null);
+  const [markerInput, setMarkerInput] = useState<{ frame: number; label: string } | null>(null);
+  const [mutedTracks, setMutedTracks] = useState<Set<string>>(new Set());
+  const [trackVolumes, setTrackVolumes] = useState<Record<string, number>>({});
 
   // ── R9: 面板宽度状态 ──
   const [sidebarWidth, setSidebarWidth] = useState(260);
@@ -93,10 +108,17 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
 
   const pxPerFrame = ZOOM_LEVELS[zoomIdx];
 
-  // ── 派生数据 ──
-  const clips: ApiClip[] = useMemo(() => (Array.isArray(rawClips) ? rawClips : []), [rawClips]);
+  // ── 派生数据（clips 以 editorStore 为源）──
+  const clips: ApiClip[] = editorState.clips;
   const clipDataItems: ClipData[] = useMemo(() => clips.map(mapClip), [clips]);
   const transitions: ApiTransition[] = useMemo(() => (Array.isArray(rawTransitions) ? rawTransitions : []), [rawTransitions]);
+  const markers: Marker[] = useMemo(() => (Array.isArray(rawMarkers) ? rawMarkers : []), [rawMarkers]);
+
+  // P6: 吸附点集合
+  const snapPoints = useMemo(
+    () => collectSnapPoints(clipDataItems, playhead, markers),
+    [clipDataItems, playhead, markers],
+  );
 
   const fps = useMemo(() => {
     if (Array.isArray(timelines) && timelines.length > 0 && timelines[0].fps) return timelines[0].fps;
@@ -126,12 +148,34 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
     return m;
   }, [clipDataItems]);
 
-  const sortedTrackIds = useMemo(() =>
-    [...tracks.keys()].sort((a, b) => {
+  // P6: 合并后端 tracks + clips 引用的轨道，后端优先
+  const backendTracks: ApiTrack[] = useMemo(() => (Array.isArray(rawTracks) ? rawTracks : []), [rawTracks]);
+
+  const sortedTrackIds = useMemo(() => {
+    const clipTrackIds = new Set(tracks.keys());
+    const backendTrackNames = new Set(backendTracks.map(t => t.name));
+    // 后端轨道名列表
+    const allIds = new Set<string>([...backendTrackNames, ...clipTrackIds]);
+    return [...allIds].sort((a, b) => {
       const aA = a.startsWith("A"), bA = b.startsWith("A");
       if (aA !== bA) return aA ? 1 : -1;
       return a.localeCompare(b);
-    }), [tracks]);
+    });
+  }, [tracks, backendTracks]);
+
+  // 轨道名映射（后端 track name → 显示名）
+  const trackNameMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of backendTracks) m.set(t.name, t.name);
+    return m;
+  }, [backendTracks]);
+
+  // 轨道类型映射
+  const trackKindMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of backendTracks) m.set(t.name, t.kind);
+    return m;
+  }, [backendTracks]);
 
   const headerWidth = 80;
 
@@ -147,47 +191,34 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
 
   const handleDeselect = useCallback(() => setSelectedClipId(null), []);
 
-  // ── R8: Undo/Redo ──
-  // 快照 = clips 数组的 JSON 序列化（轻量，适合当前规模）
-  const undoState = useUndo<string>("[]");
-
-  // 当 clips 从 API 加载/刷新时，同步到 undo 快照
-  const clipsSnapshot = useMemo(() => JSON.stringify(clips), [clips]);
-  const prevSnapshotRef = useRef(clipsSnapshot);
-  useEffect(() => {
-    if (clipsSnapshot !== prevSnapshotRef.current) {
-      prevSnapshotRef.current = clipsSnapshot;
-      undoState.commit(clipsSnapshot);
-    }
-  }, [clipsSnapshot]); // eslint-disable-line react-hooks/exhaustive-deps
-
   // ── Toast 提示 ──
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 1500);
   }, []);
 
-  // 拖拽操作的 undo 栈（useUndo 只做快照式 UI undo，这里记录 before/after 以便写回 API）
-  const timingUndoStack = useRef<TimingUndoEntry[]>([]);
-
-  const handleUndo = useCallback(() => {
-    // 优先撤销最近一次拖拽：把 before 位置写回 API
-    const entry = timingUndoStack.current.pop();
-    if (entry) {
-      api.updateClip(projectId, entry.clipId, { start_frame: entry.before.start_frame, track: entry.before.track })
-        .then(() => { showToast("↩ 已撤销拖拽"); reloadClips(); })
-        .catch(e => showToast("❌ 撤销失败: " + (e as Error).message));
-      return;
+  // ── P1: 真实 Undo/Redo（命令模式，逆向/正向操作写回 API）──
+  const handleUndo = useCallback(async () => {
+    try {
+      const cmd = await undo();
+      if (!cmd) return;
+      if (cmd.type === "addTransition") reloadTransitions();
+      showToast("↩ 已撤销");
+    } catch (e) {
+      showToast("❌ 撤销失败: " + (e as Error).message);
     }
-    undoState.undo();
-    // undo 后需要把快照写回 API（逐 clip 更新 timing）
-    // 简化实现：undo 后 reload，让 UI 反映 API 状态
-    // 完整实现需要 diff 快照并逐条 PATCH — 当前阶段先做 UI 级 undo
-  }, [projectId, reloadClips, showToast, undoState]);
+  }, [undo, reloadTransitions, showToast]);
 
-  const handleRedo = useCallback(() => {
-    undoState.redo();
-  }, [undoState]);
+  const handleRedo = useCallback(async () => {
+    try {
+      const cmd = await redo();
+      if (!cmd) return;
+      if (cmd.type === "addTransition") reloadTransitions();
+      showToast("↪ 已重做");
+    } catch (e) {
+      showToast("❌ 重做失败: " + (e as Error).message);
+    }
+  }, [redo, reloadTransitions, showToast]);
 
   // ── C 分割：在播放头位置分割选中 clip ──
   const handleSplit = useCallback(async () => {
@@ -203,28 +234,32 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
       return;
     }
     try {
-      const result = await api.splitClip(projectId, selectedClipId, { at_frame: playhead });
-      if (result.success) {
-        showToast(`✂️ 已分割 → ${result.split_id.slice(0, 8)}…`);
-        reloadClips();
-      }
+      const cmd = await execute({
+        type: "split",
+        clipId: selectedClipId,
+        atFrame: playhead,
+        splitId: "",
+        originalDuration: clip.duration_frames,
+      });
+      if (cmd && cmd.type === "split") showToast(`✂️ 已分割 → ${cmd.splitId.slice(0, 8)}…`);
     } catch (e) {
       showToast("❌ 分割失败: " + (e as Error).message);
     }
-  }, [selectedClipId, clips, playhead, projectId, reloadClips, showToast]);
+  }, [selectedClipId, clips, playhead, execute, showToast]);
 
   // ── Delete 删除选中片段 ──
   const handleDelete = useCallback(async () => {
     if (!selectedClipId) return;
+    const clip = clips.find(c => c.id === selectedClipId);
+    if (!clip) return;
     try {
-      await api.deleteClip(projectId, selectedClipId);
+      await execute({ type: "delete", clip });
       showToast("🗑️ 已删除片段");
       setSelectedClipId(null);
-      reloadClips();
     } catch (e) {
       showToast("❌ 删除失败: " + (e as Error).message);
     }
-  }, [selectedClipId, projectId, reloadClips, showToast]);
+  }, [selectedClipId, clips, execute, showToast]);
 
   // ── Ctrl+D 复制选中片段（追加到轨道末尾）──
   const handleDuplicate = useCallback(async () => {
@@ -233,13 +268,12 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
       return;
     }
     try {
-      await api.duplicateClip(projectId, selectedClipId);
+      await execute({ type: "duplicate", clipId: selectedClipId, duplicateId: "" });
       showToast("📋 已复制片段");
-      reloadClips();
     } catch (e) {
       showToast("❌ 复制失败: " + (e as Error).message);
     }
-  }, [selectedClipId, projectId, reloadClips, showToast]);
+  }, [selectedClipId, execute, showToast]);
 
   // ── 右键菜单 ──
   const handleContextMenu = useCallback((e: React.MouseEvent, clip: ClipData) => {
@@ -262,18 +296,125 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
       return;
     }
     try {
-      await api.createTransition(projectId, {
-        from_item_id: clip.id,
-        to_item_id: nextClip.id,
-        type: type.toLowerCase(),
-        duration_frames: 24,
+      await execute({
+        type: "addTransition",
+        transitionId: "",
+        fromItemId: clip.id,
+        toItemId: nextClip.id,
+        transitionType: type.toLowerCase(),
+        durationFrames: 24,
       });
       showToast(`🔗 已添加 ${type} 转场`);
       reloadTransitions();
     } catch (e) {
       showToast("❌ 添加转场失败: " + (e as Error).message);
     }
-  }, [contextMenu, clipDataItems, projectId, reloadTransitions, showToast]);
+  }, [contextMenu, clipDataItems, execute, reloadTransitions, showToast]);
+
+  // ── P6: 标记操作 ──
+  const handleAddMarker = useCallback(() => {
+    setMarkerInput({ frame: playhead, label: "" });
+  }, [playhead]);
+
+  const handleConfirmMarker = useCallback(async () => {
+    if (!markerInput) return;
+    try {
+      await markerActions.create({ frame: markerInput.frame, label: markerInput.label || `标记 ${markerInput.frame}f` });
+      showToast("🚩 已添加标记");
+      reloadMarkers();
+    } catch (e) {
+      showToast("❌ 添加标记失败: " + (e as Error).message);
+    }
+    setMarkerInput(null);
+  }, [markerInput, markerActions, reloadMarkers, showToast]);
+
+  const handleDeleteMarker = useCallback(async (markerId: string) => {
+    try {
+      await markerActions.remove(markerId);
+      showToast("🗑️ 已删除标记");
+      setMarkerMenu(null);
+      reloadMarkers();
+    } catch (e) {
+      showToast("❌ 删除标记失败: " + (e as Error).message);
+    }
+  }, [markerActions, reloadMarkers, showToast]);
+
+  const handleMarkerClick = useCallback((marker: Marker) => {
+    setPlayhead(marker.frame);
+  }, []);
+
+  const handleMarkerContextMenu = useCallback((e: React.MouseEvent, marker: Marker) => {
+    setMarkerMenu({ x: e.clientX, y: e.clientY, marker });
+  }, []);
+
+  // ── P6: 吸附开关 ──
+  const handleSnapToggle = useCallback(() => {
+    setSnapEnabled(prev => {
+      showToast(prev ? "🧲 吸附已关闭" : "🧲 吸附已开启");
+      return !prev;
+    });
+  }, [showToast]);
+
+  // ── P6: 轨道管理 ──
+  const handleAddTrack = useCallback(async (kind: "video" | "audio") => {
+    const prefix = kind === "video" ? "V" : "A";
+    const existingNums = sortedTrackIds
+      .filter(t => t.startsWith(prefix))
+      .map(t => parseInt(t.slice(1), 10))
+      .filter(n => !isNaN(n));
+    const nextNum = existingNums.length > 0 ? Math.max(...existingNums) + 1 : 1;
+    const name = `${prefix}${nextNum}`;
+    try {
+      await trackActions.create({ name, kind });
+      showToast(`➕ 已添加${kind === "video" ? "视频" : "音频"}轨道 ${name}`);
+      reloadTracks();
+    } catch (e) {
+      showToast("❌ 添加轨道失败: " + (e as Error).message);
+    }
+  }, [sortedTrackIds, trackActions, reloadTracks, showToast]);
+
+  const handleDeleteTrack = useCallback(async (trackId: string) => {
+    const backendTrack = backendTracks.find(t => t.name === trackId);
+    if (!backendTrack) {
+      showToast("⚠️ 该轨道非后端创建，无法删除");
+      return;
+    }
+    try {
+      await trackActions.remove(backendTrack.id);
+      showToast(`🗑️ 已删除轨道 ${trackId}`);
+      reloadTracks();
+    } catch (e) {
+      showToast("❌ 删除轨道失败: " + (e as Error).message);
+    }
+  }, [backendTracks, trackActions, reloadTracks, showToast]);
+
+  const handleRenameTrack = useCallback(async (trackId: string, newName: string) => {
+    const backendTrack = backendTracks.find(t => t.name === trackId);
+    if (!backendTrack) return;
+    try {
+      await trackActions.update(backendTrack.id, { name: newName });
+      reloadTracks();
+    } catch (e) {
+      showToast("❌ 重命名失败: " + (e as Error).message);
+    }
+  }, [backendTracks, trackActions, reloadTracks, showToast]);
+
+  const handleToggleMute = useCallback((trackId: string) => {
+    setMutedTracks(prev => {
+      const next = new Set(prev);
+      if (next.has(trackId)) next.delete(trackId);
+      else next.add(trackId);
+      return next;
+    });
+  }, []);
+
+  const handleVolumeChange = useCallback((trackId: string, vol: number) => {
+    setTrackVolumes(prev => ({ ...prev, [trackId]: vol }));
+  }, []);
+
+  const handleSnapLine = useCallback((frame: number | null) => {
+    setSnapLine(frame);
+  }, []);
 
   // ── 全局快捷键（useHotkeys 统一管理）──
   useHotkeys({
@@ -328,14 +469,17 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
       setPlaying(false);
       setPlayhead(h => Math.min(totalFrames - 1, h + 1));
     },
+    onAddMarker: handleAddMarker,
+    onSnapToggle: handleSnapToggle,
   });
 
-  // ── 片段拖拽：跨轨目标检测 ──
+  // ── 片段拖拽：跨轨目标检测 + P2 落点预览 ──
   const [dragInfo, setDragInfo] = useState<{ clipId: string; targetTrack: string } | null>(null);
   const dragTargetTrackRef = useRef<string | null>(null);
+  const [ghostInfo, setGhostInfo] = useState<{ trackId: string; frame: number; durationFrames: number; valid: boolean } | null>(null);
 
-  // 拖拽中鼠标移动 → 计算目标轨道（仅同类型轨道：video→video, audio→audio）
-  const handleClipDragMove = useCallback((clip: ClipData, _clientX: number, clientY: number) => {
+  // 拖拽中鼠标移动 → 计算目标轨道 + 落点预览（仅同类型轨道：video→video, audio→audio）
+  const handleClipDragMove = useCallback((clip: ClipData, _clientX: number, clientY: number, projectedFrame: number) => {
     const sameTypeTracks = sortedTrackIds.filter(t => t[0] === clip.track[0]);
     let target: string | null = null;
     // 鼠标落在某个同类型轨道的 lane 范围内 → 该轨道
@@ -362,13 +506,22 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
     setDragInfo(prev => (prev && prev.clipId === clip.id && prev.targetTrack === finalTarget)
       ? prev
       : { clipId: clip.id, targetTrack: finalTarget });
-  }, [sortedTrackIds]);
+
+    // P2: 实时碰撞检测 → ghost 预览
+    const newEnd = projectedFrame + clip.durationInFrames;
+    const hasOverlap = clipDataItems.some(c =>
+      c.id !== clip.id && c.track === finalTarget &&
+      projectedFrame < c.startFrame + c.durationInFrames && newEnd > c.startFrame,
+    );
+    setGhostInfo({ trackId: finalTarget, frame: projectedFrame, durationFrames: clip.durationInFrames, valid: !hasOverlap });
+  }, [sortedTrackIds, clipDataItems]);
 
   // 拖拽片段落点 → 碰撞检测 + 更新 startFrame/track + undo 记录
   const handleClipDragEnd = useCallback(async (clipId: string, newStartFrame: number) => {
     const targetTrack = dragTargetTrackRef.current;
     dragTargetTrackRef.current = null;
     setDragInfo(null);
+    setGhostInfo(null);
 
     const clip = clipDataItems.find(c => c.id === clipId);
     if (!clip) return;
@@ -387,38 +540,50 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
     }
 
     try {
-      if (newTrack !== clip.track) {
-        await api.updateClip(projectId, clipId, { start_frame: newStartFrame, track: newTrack });
-      } else {
-        await api.updateClipTiming(projectId, clipId, { start_frame: newStartFrame });
-      }
-      timingUndoStack.current.push({
-        type: "timing",
+      await execute({
+        type: "move",
         clipId,
-        before: { start_frame: clip.startFrame, track: clip.track },
-        after: { start_frame: newStartFrame, track: newTrack },
+        from: { startFrame: clip.startFrame, track: clip.track },
+        to: { startFrame: newStartFrame, track: newTrack },
       });
-      reloadClips();
     } catch (e) {
-      console.error("拖拽更新失败:", e);
+      showToast("❌ 移动失败: " + (e as Error).message);
     }
-  }, [clipDataItems, projectId, reloadClips, showToast]);
+  }, [clipDataItems, execute, showToast]);
+
+  // 片段 trim（左右手柄）→ trim 命令入栈
+  const handleTrimEnd = useCallback(async (clipId: string, newSrcInFrame: number, newDurationFrames: number, newStartFrame: number) => {
+    const clip = clipDataItems.find(c => c.id === clipId);
+    if (!clip) return;
+    try {
+      await execute({
+        type: "trim",
+        clipId,
+        before: { startFrame: clip.startFrame, durationFrames: clip.durationInFrames, srcInFrame: clip.srcInFrame },
+        after: { startFrame: newStartFrame, durationFrames: newDurationFrames, srcInFrame: newSrcInFrame },
+      });
+    } catch (e) {
+      showToast("❌ Trim 失败: " + (e as Error).message);
+    }
+  }, [clipDataItems, execute, showToast]);
 
   // 拖拽转场到轨道 → 创建转场
   const handleTransitionDrop = useCallback(async (transitionType: string, fromClipId: string, toClipId: string) => {
     try {
-      await api.createTransition(projectId, {
-        from_item_id: fromClipId,
-        to_item_id: toClipId,
-        type: transitionType,
-        duration_frames: 24,
+      await execute({
+        type: "addTransition",
+        transitionId: "",
+        fromItemId: fromClipId,
+        toItemId: toClipId,
+        transitionType,
+        durationFrames: 24,
       });
       showToast(`🔗 已添加 ${transitionType} 转场`);
       reloadTransitions();
     } catch (e) {
       showToast("❌ 添加转场失败: " + (e as Error).message);
     }
-  }, [projectId, reloadTransitions, showToast]);
+  }, [execute, reloadTransitions, showToast]);
 
   // Inspector 编辑转场（类型立即生效 / 时长 blur 提交）
   const handleUpdateTransition = useCallback(async (transitionId: string, body: { type?: string; duration_frames?: number }) => {
@@ -474,26 +639,34 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
         </button>
         <span className="text-lg font-semibold">{projectName}</span>
         <span className="text-text-dim text-[13px] ml-1">
-          {fps}fps · {clips.length} 片段 · {transitions.length} 转场 · {frameToTime(totalFrames, fps)}
+          {fps}fps · {clips.length} 片段 · {transitions.length} 转场 · {markers.length} 标记 · {frameToTime(totalFrames, fps)}
         </span>
 
         {/* Undo/Redo 按钮 */}
         <div className="flex items-center gap-1 ml-2">
           <button
             onClick={handleUndo}
-            disabled={!undoState.canUndo}
-            title="撤销 (⌘Z)"
+            disabled={!canUndo}
+            title="撤销 (Z / ⌘Z)"
             className="w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-text hover:bg-hover disabled:opacity-30 disabled:cursor-default text-sm bg-transparent border-none cursor-pointer"
           >
             ↩
           </button>
           <button
             onClick={handleRedo}
-            disabled={!undoState.canRedo}
-            title="重做 (⌘⇧Z)"
+            disabled={!canRedo}
+            title="重做 (⇧Z / ⌘⇧Z)"
             className="w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-text hover:bg-hover disabled:opacity-30 disabled:cursor-default text-sm bg-transparent border-none cursor-pointer"
           >
             ↪
+          </button>
+          <button
+            onClick={handleSnapToggle}
+            title="吸附开关 (S)"
+            className="w-7 h-7 rounded flex items-center justify-center text-sm bg-transparent border-none cursor-pointer"
+            style={{ opacity: snapEnabled ? 1 : 0.35 }}
+          >
+            🧲
           </button>
         </div>
 
@@ -547,7 +720,7 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
                 }
                 reloadClips();
               } catch (err) {
-                alert("导入失败: " + (err as Error).message);
+                showToast("❌ 导入失败: " + (err as Error).message);
               }
             }}
           />
@@ -626,7 +799,8 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
       {/* ═══ 底部时间线 ═══ */}
       <div
         className="h-[220px] shrink-0 border-t border-border flex flex-col overflow-hidden"
-        onClick={() => setContextMenu(null)}
+        style={{ position: "relative" }}
+        onClick={() => { setContextMenu(null); setMarkerMenu(null); }}
       >
         {/* 标尺 */}
         <div className="overflow-x-auto shrink-0">
@@ -637,6 +811,11 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
             playhead={playhead}
             onSeek={setPlayhead}
             headerWidth={headerWidth}
+            markers={markers}
+            onMarkerClick={handleMarkerClick}
+            onMarkerContextMenu={handleMarkerContextMenu}
+            snapEnabled={snapEnabled}
+            snapPoints={snapPoints}
           />
         </div>
 
@@ -646,6 +825,8 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
             <TrackLane
               key={trackId}
               trackId={trackId}
+              trackName={trackNameMap.get(trackId)}
+              trackKind={trackKindMap.get(trackId) ?? (trackId.startsWith("A") ? "audio" : "video")}
               clips={tracks.get(trackId) ?? []}
               transitions={transitions}
               pxPerFrame={pxPerFrame}
@@ -657,17 +838,32 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
               onSelectTransition={handleSelectTransition}
               onClipDragEnd={handleClipDragEnd}
               onClipDragMove={handleClipDragMove}
+              onTrimEnd={handleTrimEnd}
               onTransitionDrop={handleTransitionDrop}
               onUpdateTransition={handleUpdateTransition}
               onContextMenu={handleContextMenu}
               dropTarget={dropTargetTrack === trackId}
+              dropGhost={ghostInfo && ghostInfo.trackId === trackId ? { frame: ghostInfo.frame, durationFrames: ghostInfo.durationFrames, valid: ghostInfo.valid } : null}
               fps={fps}
               headerWidth={headerWidth}
+              muted={mutedTracks.has(trackId)}
+              onToggleMute={() => handleToggleMute(trackId)}
+              onRenameTrack={(name) => handleRenameTrack(trackId, name)}
+              onDeleteTrack={() => handleDeleteTrack(trackId)}
+              volume={trackVolumes[trackId] ?? 100}
+              onVolumeChange={(vol) => handleVolumeChange(trackId, vol)}
+              snapEnabled={snapEnabled}
+              snapPoints={snapPoints}
+              onSnapLine={handleSnapLine}
             />
           ))}
           {sortedTrackIds.length === 0 && (
             <div className="p-6 text-text-dim text-[13px] text-center">暂无轨道数据</div>
           )}
+          {/* 添加轨道按钮 */}
+          <div style={{ padding: "4px 0 4px 8px" }}>
+            <AddTrackButton onAdd={handleAddTrack} />
+          </div>
         </div>
 
         {/* 播放头控制条 */}
@@ -686,6 +882,21 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
             </span>
           </div>
         </div>
+
+        {/* P6: 吸附线（红色垂直高亮线） */}
+        {snapLine !== null && (
+          <div style={{
+            position: "absolute",
+            left: headerWidth + snapLine * pxPerFrame,
+            top: 0,
+            bottom: 0,
+            width: 1,
+            background: "#ef4444",
+            zIndex: 50,
+            pointerEvents: "none",
+            boxShadow: "0 0 4px #ef4444",
+          }} />
+        )}
       </div>
 
       {/* ═══ 弹层 ═══ */}
@@ -712,8 +923,53 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
           onDuplicate={handleDuplicate}
           onDelete={handleDelete}
           onAddTransition={handleAddTransition}
+          onOpenTool={() => {}}
           onClose={() => setContextMenu(null)}
         />
+      )}
+
+      {/* 标记右键菜单 */}
+      {markerMenu && (
+        <div
+          className="fixed z-[2000] bg-panel border border-border-light rounded-md shadow-lg py-1"
+          style={{ left: markerMenu.x, top: markerMenu.y, minWidth: 120 }}
+          onClick={() => setMarkerMenu(null)}
+        >
+          <div className="px-3 py-1.5 text-[11px] text-text-dim border-b border-border mb-1">
+            🚩 {markerMenu.marker.label || `${markerMenu.marker.frame}f`}
+          </div>
+          <button
+            onClick={() => handleDeleteMarker(markerMenu.marker.id)}
+            className="w-full text-left px-3 py-1.5 text-[13px] text-red-400 hover:bg-hover bg-transparent border-none cursor-pointer"
+          >
+            🗑️ 删除标记
+          </button>
+        </div>
+      )}
+
+      {/* 标记输入框（M 键触发） */}
+      {markerInput && (
+        <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/40" onClick={() => setMarkerInput(null)}>
+          <div
+            className="bg-panel border border-border-light rounded-lg p-4 shadow-xl"
+            style={{ minWidth: 280 }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="text-sm font-semibold mb-2">🚩 添加标记 — 帧 {markerInput.frame}</div>
+            <input
+              autoFocus
+              value={markerInput.label}
+              onChange={e => setMarkerInput(prev => prev ? { ...prev, label: e.target.value } : null)}
+              onKeyDown={e => { if (e.key === "Enter") handleConfirmMarker(); if (e.key === "Escape") setMarkerInput(null); }}
+              placeholder="标记名称（可选）"
+              className="w-full px-3 py-1.5 rounded bg-bg border border-border-light text-text text-sm outline-none"
+            />
+            <div className="flex justify-end gap-2 mt-3">
+              <button onClick={() => setMarkerInput(null)} className="px-3 py-1 rounded text-[13px] bg-transparent border border-border-light text-text-muted cursor-pointer">取消</button>
+              <button onClick={handleConfirmMarker} className="px-3 py-1 rounded text-[13px] bg-accent text-on-accent border-none cursor-pointer">添加</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* MediaPlayer（仅用于 SidePanel 素材预览） */}
@@ -747,8 +1003,11 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
         <span>L 前进</span>
         <span>C 分割</span>
         <span>⌘D 复制</span>
-        <span>⌘Z 撤销</span>
+        <span>Z 撤销</span>
+        <span>⇧Z 重做</span>
         <span>Del 删除</span>
+        <span>M 标记</span>
+        <span>S 吸附</span>
       </div>
     </div>
   );

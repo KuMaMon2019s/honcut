@@ -107,6 +107,16 @@ type DesignStyle struct {
 	CreatedAt string `json:"created_at"`
 }
 
+// Marker represents a timeline marker at a specific frame
+type Marker struct {
+	ID        string `json:"id"`
+	ProjectID string `json:"project_id"`
+	Frame     int    `json:"frame"`
+	Label     string `json:"label"`
+	Color     string `json:"color"`
+	CreatedAt string `json:"created_at"`
+}
+
 // Store handles SQLite persistence for projects
 type Store struct {
 	db *sql.DB
@@ -215,6 +225,16 @@ func NewStore(dbPath string) (*Store, error) {
 		name        TEXT NOT NULL,
 		colors      TEXT DEFAULT '{}',
 		fonts       TEXT DEFAULT '{}',
+		created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+	);
+
+	CREATE TABLE IF NOT EXISTS markers (
+		id          TEXT PRIMARY KEY,
+		project_id  TEXT NOT NULL,
+		frame       INTEGER NOT NULL,
+		label       TEXT DEFAULT '',
+		color       TEXT DEFAULT '#facc15',
 		created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 	);`
@@ -1010,6 +1030,92 @@ func (s *Store) DeleteAsset(id string) (bool, error) {
 	res, err := s.db.Exec("DELETE FROM media_assets WHERE id = ?", id)
 	if err != nil {
 		return false, fmt.Errorf("delete asset: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ─── Marker CRUD ────────────────────────────────────────────────────────
+
+// CreateMarker inserts a new marker.
+func (s *Store) CreateMarker(m *Marker) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	m.CreatedAt = now
+	_, err := s.db.Exec(
+		"INSERT INTO markers (id, project_id, frame, label, color, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+		m.ID, m.ProjectID, m.Frame, m.Label, m.Color, now,
+	)
+	if err != nil {
+		return fmt.Errorf("insert marker: %w", err)
+	}
+	return nil
+}
+
+// ListMarkers returns all markers for a project, ordered by frame.
+func (s *Store) ListMarkers(projectID string) ([]*Marker, error) {
+	rows, err := s.db.Query("SELECT id, project_id, frame, label, color, created_at FROM markers WHERE project_id = ? ORDER BY frame", projectID)
+	if err != nil {
+		return nil, fmt.Errorf("list markers: %w", err)
+	}
+	defer rows.Close()
+
+	var markers []*Marker
+	for rows.Next() {
+		var m Marker
+		if err := rows.Scan(&m.ID, &m.ProjectID, &m.Frame, &m.Label, &m.Color, &m.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan marker: %w", err)
+		}
+		markers = append(markers, &m)
+	}
+	return markers, rows.Err()
+}
+
+// GetMarker retrieves a marker by ID. Returns nil, nil when not found.
+func (s *Store) GetMarker(id string) (*Marker, error) {
+	row := s.db.QueryRow("SELECT id, project_id, frame, label, color, created_at FROM markers WHERE id = ?", id)
+	var m Marker
+	if err := row.Scan(&m.ID, &m.ProjectID, &m.Frame, &m.Label, &m.Color, &m.CreatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("query marker: %w", err)
+	}
+	return &m, nil
+}
+
+// UpdateMarker updates a marker's frame, label, and/or color.
+func (s *Store) UpdateMarker(id string, frame *int, label *string, color *string) error {
+	m, err := s.GetMarker(id)
+	if err != nil {
+		return err
+	}
+	if m == nil {
+		return fmt.Errorf("marker not found: %s", id)
+	}
+	if frame != nil {
+		m.Frame = *frame
+	}
+	if label != nil {
+		m.Label = *label
+	}
+	if color != nil {
+		m.Color = *color
+	}
+	_, err = s.db.Exec(
+		"UPDATE markers SET frame = ?, label = ?, color = ? WHERE id = ?",
+		m.Frame, m.Label, m.Color, id,
+	)
+	if err != nil {
+		return fmt.Errorf("update marker: %w", err)
+	}
+	return nil
+}
+
+// DeleteMarker removes a marker. Returns true if a row was deleted.
+func (s *Store) DeleteMarker(id string) (bool, error) {
+	res, err := s.db.Exec("DELETE FROM markers WHERE id = ?", id)
+	if err != nil {
+		return false, fmt.Errorf("delete marker: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil

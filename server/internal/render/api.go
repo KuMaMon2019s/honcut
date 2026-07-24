@@ -63,9 +63,10 @@ func RenderHandler(pm *ProgressManager, outputDir string) http.Handler {
 
 // startRender starts a new render job
 func startRender(w http.ResponseWriter, r *http.Request, pm *ProgressManager, jobID, outputDir string) {
-	// Parse request body for project_id
+	// Parse request body for project_id and optional render settings
 	var req struct {
-		ProjectID string `json:"project_id"`
+		ProjectID string         `json:"project_id"`
+		Settings  RenderSettings `json:"settings"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
@@ -77,8 +78,8 @@ func startRender(w http.ResponseWriter, r *http.Request, pm *ProgressManager, jo
 		return
 	}
 
-	// Create job
-	job := pm.CreateJob(jobID, req.ProjectID)
+	// Create job with settings (Normalize fills defaults for zero values)
+	job := pm.CreateJob(jobID, req.ProjectID, req.Settings)
 
 	// Start render
 	if err := pm.StartRender(jobID, outputDir); err != nil {

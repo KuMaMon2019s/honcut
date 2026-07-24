@@ -1,6 +1,9 @@
 // Ruler.tsx — 时间线标尺
-// 显示时间刻度 + 播放头位置 + 点击/拖拽定位
-// Props: totalFrames, fps, pxPerFrame, playhead, onSeek, headerWidth
+// 显示时间刻度 + 播放头位置 + 点击/拖拽定位 + 标记显示 + 吸附
+// Props: totalFrames, fps, pxPerFrame, playhead, onSeek, headerWidth, markers, snapEnabled, snapPoints
+
+import type { Marker } from "../api/client";
+import { snapToFrame } from "../utils/snapping";
 
 interface RulerProps {
   totalFrames: number;
@@ -9,6 +12,11 @@ interface RulerProps {
   playhead: number;
   onSeek: (frame: number) => void;
   headerWidth: number;
+  markers?: Marker[];
+  onMarkerClick?: (marker: Marker) => void;
+  onMarkerContextMenu?: (e: React.MouseEvent, marker: Marker) => void;
+  snapEnabled?: boolean;
+  snapPoints?: number[];
 }
 
 function frameToTimecode(f: number, fps: number): string {
@@ -31,7 +39,7 @@ function tickInterval(fps: number, pxPerFrame: number): number {
   return fps * 60;
 }
 
-export default function Ruler({ totalFrames, fps, pxPerFrame, playhead, onSeek, headerWidth }: RulerProps) {
+export default function Ruler({ totalFrames, fps, pxPerFrame, playhead, onSeek, headerWidth, markers = [], onMarkerClick, onMarkerContextMenu, snapEnabled, snapPoints }: RulerProps) {
   const totalWidth = totalFrames * pxPerFrame;
   const interval = tickInterval(fps, pxPerFrame);
   const ticks: number[] = [];
@@ -42,7 +50,12 @@ export default function Ruler({ totalFrames, fps, pxPerFrame, playhead, onSeek, 
   const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const frame = Math.max(0, Math.min(totalFrames, Math.round(x / pxPerFrame)));
+    let frame = Math.max(0, Math.min(totalFrames, Math.round(x / pxPerFrame)));
+    if (snapEnabled && snapPoints && snapPoints.length > 0) {
+      const threshold = 8 / pxPerFrame;
+      const result = snapToFrame(frame, snapPoints, threshold);
+      frame = result.frame;
+    }
     onSeek(frame);
   };
 
@@ -110,6 +123,27 @@ export default function Ruler({ totalFrames, fps, pxPerFrame, playhead, onSeek, 
             borderTop: "6px solid #ef4444",
           }} />
         </div>
+
+        {/* 标记 */}
+        {markers.map(m => (
+          <div
+            key={m.id}
+            title={m.label ? `${m.label} (${m.frame}f)` : `${m.frame}f`}
+            onClick={(e) => { e.stopPropagation(); onMarkerClick?.(m); }}
+            onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onMarkerContextMenu?.(e, m); }}
+            style={{
+              position: "absolute",
+              left: m.frame * pxPerFrame - 4,
+              bottom: 0,
+              width: 0, height: 0,
+              borderLeft: "5px solid transparent",
+              borderRight: "5px solid transparent",
+              borderBottom: `8px solid ${m.color}`,
+              cursor: "pointer",
+              zIndex: 15,
+            }}
+          />
+        ))}
       </div>
     </div>
   );

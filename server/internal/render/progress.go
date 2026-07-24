@@ -18,6 +18,47 @@ import (
 // FPS is the default output framerate
 const FPS = 30
 
+// RenderSettings holds user-configurable export parameters
+type RenderSettings struct {
+	Codec    string `json:"codec"`    // h264 (default), h265, vp9, av1
+	Width    int    `json:"width"`    // output width, 0 = source
+	Height   int    `json:"height"`   // output height, 0 = source
+	FPS      int    `json:"fps"`      // output framerate, 0 = default (30)
+	CRF      int    `json:"crf"`      // quality 0-51, 0 = default (23 for h264)
+	Preset   string `json:"preset"`   // ultrafast..veryslow, "" = medium
+	AudioBR  string `json:"audio_br"` // audio bitrate e.g. "192k", "" = 128k
+}
+
+// DefaultRenderSettings returns sensible defaults
+func DefaultRenderSettings() RenderSettings {
+	return RenderSettings{
+		Codec:   "h264",
+		FPS:     FPS,
+		CRF:     23,
+		Preset:  "medium",
+		AudioBR: "128k",
+	}
+}
+
+// Normalize fills in zero-value fields with defaults
+func (s *RenderSettings) Normalize() {
+	if s.Codec == "" {
+		s.Codec = "h264"
+	}
+	if s.FPS <= 0 {
+		s.FPS = FPS
+	}
+	if s.CRF <= 0 {
+		s.CRF = 23
+	}
+	if s.Preset == "" {
+		s.Preset = "medium"
+	}
+	if s.AudioBR == "" {
+		s.AudioBR = "128k"
+	}
+}
+
 // RenderStatus represents the current state of a render job
 type RenderStatus string
 
@@ -31,15 +72,16 @@ const (
 
 // RenderJob represents a single render task
 type RenderJob struct {
-	ID          string       `json:"id"`
-	ProjectID   string       `json:"project_id"`
-	Status      RenderStatus `json:"status"`
-	Progress    int          `json:"progress"` // 0-100
-	OutputPath  string       `json:"output_path,omitempty"`
-	Error       string       `json:"error,omitempty"`
-	CreatedAt   time.Time    `json:"created_at"`
-	StartedAt   *time.Time   `json:"started_at,omitempty"`
-	CompletedAt *time.Time   `json:"completed_at,omitempty"`
+	ID          string         `json:"id"`
+	ProjectID   string         `json:"project_id"`
+	Status      RenderStatus   `json:"status"`
+	Progress    int            `json:"progress"` // 0-100
+	OutputPath  string         `json:"output_path,omitempty"`
+	Error       string         `json:"error,omitempty"`
+	Settings    RenderSettings `json:"settings"`
+	CreatedAt   time.Time      `json:"created_at"`
+	StartedAt   *time.Time     `json:"started_at,omitempty"`
+	CompletedAt *time.Time     `json:"completed_at,omitempty"`
 
 	cancel context.CancelFunc `json:"-"`
 	cmd    *exec.Cmd          `json:"-"`
@@ -111,12 +153,14 @@ func NewProgressManager(pipeline *Pipeline) *ProgressManager {
 }
 
 // CreateJob creates a new render job
-func (pm *ProgressManager) CreateJob(id, projectID string) *RenderJob {
+func (pm *ProgressManager) CreateJob(id, projectID string, settings RenderSettings) *RenderJob {
+	settings.Normalize()
 	job := &RenderJob{
 		ID:        id,
 		ProjectID: projectID,
 		Status:    StatusPending,
 		Progress:  0,
+		Settings:  settings,
 		CreatedAt: time.Now(),
 	}
 	pm.jobs.Store(id, job)
@@ -305,6 +349,9 @@ func (pm *ProgressManager) StartRender(id string, outputDir string) error {
 
 // Execute runs the full render pipeline for a project.
 func (p *Pipeline) Execute(ctx context.Context, projectID string, job *RenderJob) (string, error) {
+	// Ensure settings have defaults (jobs created before settings existed may have zero values)
+	job.Settings.Normalize()
+
 	// Create output directory if it doesn't exist
 	if err := os.MkdirAll(p.OutputDir, 0755); err != nil {
 		return "", fmt.Errorf("create output dir: %w", err)
@@ -351,7 +398,7 @@ func (p *Pipeline) Execute(ctx context.Context, projectID string, job *RenderJob
 	}
 
 	// Generate ffmpeg command
-	args := p.buildFFmpegCommand(clips, transInfos)
+	args := p.buildFFmpegCommand(clips, transInfos, job.Settings)
 
 	// Ensure output directory exists
 	if err := os.MkdirAll(p.OutputDir, 0755); err != nil {
@@ -414,7 +461,7 @@ func (p *Pipeline) Execute(ctx context.Context, projectID string, job *RenderJob
 
 // buildFFmpegCommand generates ffmpeg command arguments (without output file)
 // The caller (Execute) is responsible for appending the output path.
-func (p *Pipeline) buildFFmpegCommand(clips []RenderClip, transitions []RenderTransitionInfo) []string {
+func (p *Pipeline) buildFFmpegCommand(clips []RenderClip, transitions []RenderTransitionInfo, settings RenderSettings) []string {
 	var args []string
 
 	// Input files
@@ -424,12 +471,35 @@ func (p *Pipeline) buildFFmpegCommand(clips []RenderClip, transitions []RenderTr
 
 	// Build filter_complex
 	filterComplex := p.buildFilterComplex(clips, transitions)
-	args = append(args, "-filter_complex", filterComplex)
 
-	// Map the filter output and set codec
-	args = append(args, "-map", "[out]")
-	args = append(args, "-c:v", "libx264", "-preset", "medium", "-crf", "23")
-	args = append(args, "-c:a", "aac", "-b:a", "128k")
+	// Append scale filter if resolution is specified
+	if settings.Width > 0 && settings.Height > 0 {
+		filterComplex += fmt.Sprintf(";[out]scale=%d:%d[scaled]", settings.Width, settings.Height)
+		args = append(args, "-filter_complex", filterComplex)
+		args = append(args, "-map", "[scaled]")
+	} else {
+		args = append(args, "-filter_complex", filterComplex)
+		args = append(args, "-map", "[out]")
+	}
+
+	// Video codec
+	switch settings.Codec {
+	case "h265", "hevc":
+		args = append(args, "-c:v", "libx265", "-preset", settings.Preset, "-crf", fmt.Sprintf("%d", settings.CRF))
+		args = append(args, "-tag:v", "hvc1") // Apple compatibility
+	case "vp9":
+		args = append(args, "-c:v", "libvpx-vp9", "-crf", fmt.Sprintf("%d", settings.CRF), "-b:v", "0")
+	case "av1":
+		args = append(args, "-c:v", "libsvtav1", "-crf", fmt.Sprintf("%d", settings.CRF))
+	default: // h264
+		args = append(args, "-c:v", "libx264", "-preset", settings.Preset, "-crf", fmt.Sprintf("%d", settings.CRF))
+	}
+
+	// Frame rate
+	args = append(args, "-r", fmt.Sprintf("%d", settings.FPS))
+
+	// Audio codec
+	args = append(args, "-c:a", "aac", "-b:a", settings.AudioBR)
 	args = append(args, "-movflags", "+faststart")
 	args = append(args, "-y") // Overwrite output file
 

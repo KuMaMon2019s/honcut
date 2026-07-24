@@ -1,5 +1,5 @@
 // useHotkeys.ts — 全局快捷键
-// 空格=播放/暂停, J=后退, K=暂停, L=前进, C=分割, Delete=删除, ⌘D=复制, ⌘Z=撤销
+// 空格=播放/暂停, J=后退, K=暂停, L=前进, C=分割, Delete=删除, ⌘D=复制, Z/⌘Z=撤销, ⇧Z/⌘⇧Z=重做
 // 在 input/textarea/contentEditable 聚焦时忽略（除 Escape 外）
 
 import { useEffect, useRef } from "react";
@@ -16,6 +16,8 @@ export interface HotkeyHandlers {
   onDuplicate?: () => void;
   onUndo?: () => void;
   onRedo?: () => void;
+  onAddMarker?: () => void;
+  onSnapToggle?: () => void;
 }
 
 function isTypingTarget(el: EventTarget | null): boolean {
@@ -78,6 +80,15 @@ export function useHotkeys(handlers: HotkeyHandlers): void {
         case "C":
           if (!e.metaKey && !e.ctrlKey) { e.preventDefault(); h.onSplit?.(); }
           break;
+        case "z":
+        case "Z":
+          // 单键 Z 撤销 / Shift+Z 重做（⌘Z / ⌘⇧Z 已在上方处理）
+          if (!e.metaKey && !e.ctrlKey) {
+            e.preventDefault();
+            if (e.shiftKey) h.onRedo?.();
+            else h.onUndo?.();
+          }
+          break;
         case "Delete":
         case "Backspace":
           e.preventDefault();
@@ -90,6 +101,18 @@ export function useHotkeys(handlers: HotkeyHandlers): void {
         case "ArrowRight":
           e.preventDefault();
           h.onFrameForward?.();
+          break;
+        case "m":
+        case "M":
+          e.preventDefault();
+          h.onAddMarker?.();
+          break;
+        case "s":
+        case "S":
+          if (!e.metaKey && !e.ctrlKey) {
+            e.preventDefault();
+            h.onSnapToggle?.();
+          }
           break;
       }
     };

@@ -141,6 +141,19 @@ func APIHandler(store *Store, pm *render.ProgressManager, outputDir string) http
 		deleteDesignStyle(w, r, store, r.PathValue("id"), r.PathValue("style_id"))
 	})
 
+	mux.HandleFunc("GET /api/projects/{id}/markers", func(w http.ResponseWriter, r *http.Request) {
+		listMarkers(w, r, store, r.PathValue("id"))
+	})
+	mux.HandleFunc("POST /api/projects/{id}/markers", func(w http.ResponseWriter, r *http.Request) {
+		createMarker(w, r, store, r.PathValue("id"))
+	})
+	mux.HandleFunc("PATCH /api/projects/{id}/markers/{marker_id}", func(w http.ResponseWriter, r *http.Request) {
+		updateMarker(w, r, store, r.PathValue("id"), r.PathValue("marker_id"))
+	})
+	mux.HandleFunc("DELETE /api/projects/{id}/markers/{marker_id}", func(w http.ResponseWriter, r *http.Request) {
+		deleteMarker(w, r, store, r.PathValue("id"), r.PathValue("marker_id"))
+	})
+
 	mux.HandleFunc("GET /api/projects/{id}/assets", func(w http.ResponseWriter, r *http.Request) {
 		listAssets(w, r, store, r.PathValue("id"))
 	})
@@ -172,10 +185,15 @@ func APIHandler(store *Store, pm *render.ProgressManager, outputDir string) http
 		uploadHandler(w, r, store)
 	})
 
-	// MCP JSON-RPC over HTTP
+	// MCP HTTP endpoint
 	mux.HandleFunc("POST /api/mcp", func(w http.ResponseWriter, r *http.Request) {
 		handleMCPHTTP(w, r, mcpServer)
 	})
+
+	// Static file server for uploaded media
+	homeDir, _ := os.UserHomeDir()
+	uploadDir := filepath.Join(homeDir, ".honcut", "uploads")
+	mux.Handle("GET /uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadDir))))
 
 	return mux
 }
@@ -324,6 +342,10 @@ func uploadHandler(w http.ResponseWriter, r *http.Request, store *Store) {
 		os.MkdirAll(uploadDir, 0755)
 
 		safeName := uuid.New().String()[:8] + "_" + sanitizeFilename(fileName)
+		// Preserve file extension
+		if ext := filepath.Ext(fileName); ext != "" && !strings.HasSuffix(safeName, ext) {
+			safeName += ext
+		}
 		srcPath = filepath.Join(uploadDir, safeName)
 
 		dst, err := os.Create(srcPath)
@@ -370,6 +392,10 @@ func uploadHandler(w http.ResponseWriter, r *http.Request, store *Store) {
 		os.MkdirAll(uploadDir, 0755)
 
 		safeName := uuid.New().String()[:8] + "_" + sanitizeFilename(fileName)
+		// Preserve file extension
+		if ext := filepath.Ext(fileName); ext != "" && !strings.HasSuffix(safeName, ext) {
+			safeName += ext
+		}
 		srcPath = filepath.Join(uploadDir, safeName)
 
 		if err := os.WriteFile(srcPath, data, 0644); err != nil {
@@ -1122,6 +1148,91 @@ func updateDesignStyle(w http.ResponseWriter, r *http.Request, store *Store, pro
 
 func deleteDesignStyle(w http.ResponseWriter, r *http.Request, store *Store, projectID, styleID string) {
 	deleted, err := store.DeleteDesignStyle(styleID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !deleted {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ── Marker handlers ─────────────────────────────────────────────────────
+
+type markerCreateRequest struct {
+	Frame int    `json:"frame"`
+	Label string `json:"label"`
+	Color string `json:"color"`
+}
+
+type markerUpdateRequest struct {
+	Frame *int    `json:"frame"`
+	Label *string `json:"label"`
+	Color *string `json:"color"`
+}
+
+func listMarkers(w http.ResponseWriter, r *http.Request, store *Store, projectID string) {
+	markers, err := store.ListMarkers(projectID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(markers)
+}
+
+func createMarker(w http.ResponseWriter, r *http.Request, store *Store, projectID string) {
+	var req markerCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if req.Color == "" {
+		req.Color = "#facc15"
+	}
+
+	m := &Marker{
+		ID:        uuid.New().String(),
+		ProjectID: projectID,
+		Frame:     req.Frame,
+		Label:     req.Label,
+		Color:     req.Color,
+	}
+
+	if err := store.CreateMarker(m); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(m)
+}
+
+func updateMarker(w http.ResponseWriter, r *http.Request, store *Store, projectID, markerID string) {
+	var req markerUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	if err := store.UpdateMarker(markerID, req.Frame, req.Label, req.Color); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	m, err := store.GetMarker(markerID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(m)
+}
+
+func deleteMarker(w http.ResponseWriter, r *http.Request, store *Store, projectID, markerID string) {
+	deleted, err := store.DeleteMarker(markerID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
