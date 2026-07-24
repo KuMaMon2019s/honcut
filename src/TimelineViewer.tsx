@@ -8,6 +8,7 @@ import PreviewPanel from "./components/PreviewPanel";
 import InspectorPanel from "./components/InspectorPanel";
 import ExportDialog from "./components/ExportDialog";
 import MediaPlayer from "./components/MediaPlayer";
+import { SettingsDialog } from "./components/SettingsDialog";
 import Ruler from "./components/Ruler";
 import TrackLane from "./components/TrackLane";
 import ResizeHandle from "./components/ResizeHandle";
@@ -91,6 +92,7 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
   const [selectedTransitionId, setSelectedTransitionId] = useState<string | null>(null);
   const [selectedMedia, setSelectedMedia] = useState<{ src: string; kind: "video" | "audio"; name: string } | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [zoomIdx, setZoomIdx] = useState(DEFAULT_ZOOM_IDX);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -711,6 +713,11 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
         >
           🎬 渲染
         </button>
+        {/* 设置 */}
+        <button onClick={() => setSettingsOpen(true)}
+          className="px-2 py-1.5 rounded text-[13px] bg-transparent border border-border-light text-text-muted hover:text-text cursor-pointer"
+          title="设置 (⌘,)"
+        >⚙</button>
 
         {/* 导出 JSON */}
         <button
@@ -943,6 +950,7 @@ export default function TimelineViewer({ projectId, onBack }: { projectId: strin
           onClose={() => setExportOpen(false)}
         />
       )}
+      {settingsOpen && <SettingsDialog projectId={projectId} onClose={() => setSettingsOpen(false)} />}
 
       {/* P3: MCP 命令面板 (⌘K / Ctrl+K) */}
       {paletteOpen && (

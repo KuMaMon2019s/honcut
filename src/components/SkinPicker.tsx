@@ -1,5 +1,5 @@
-// SkinPicker.tsx — 皮肤选择器
-import { useState } from 'react';
+// SkinPicker.tsx — 皮肤选择器（实际生效）
+import { useState, useEffect } from 'react';
 
 const skins = [
   { id: 'dark', name: '暗夜', accent: '#e94560', bg: '#0f0f1a' },
@@ -10,14 +10,26 @@ const skins = [
 ];
 
 export function SkinPicker() {
-  const [active, setActive] = useState('dark');
+  const saved = localStorage.getItem('honcut-skin') || 'dark';
+  const [active, setActive] = useState(saved);
+
+  const applySkin = (id: string) => {
+    const s = skins.find(sk => sk.id === id) || skins[0];
+    const root = document.documentElement;
+    root.style.setProperty('--accent', s.accent);
+    root.style.setProperty('--bg', s.bg);
+    localStorage.setItem('honcut-skin', id);
+    setActive(id);
+  };
+
+  useEffect(() => { applySkin(saved); }, []);
 
   return (
     <div style={wrap}>
       <h3 style={h}>🎨 皮肤</h3>
       <div style={grid}>
         {skins.map(s => (
-          <button key={s.id} onClick={() => setActive(s.id)}
+          <button key={s.id} onClick={() => applySkin(s.id)}
             style={{
               ...card,
               border: active === s.id ? `2px solid ${s.accent}` : '2px solid #333',

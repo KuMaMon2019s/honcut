@@ -5,9 +5,9 @@ import { useState } from 'react';
 import { DesignStylePanel } from './DesignStylePanel';
 import { SkinPicker } from './SkinPicker';
 
-interface Props { onClose: () => void }
+interface Props { projectId: string; onClose: () => void }
 
-export function SettingsDialog({ onClose }: Props) {
+export function SettingsDialog({ projectId, onClose }: Props) {
   const [tab, setTab] = useState<'models' | 'design' | 'skin'>('models');
   const [saved, setSaved] = useState<string | null>(null);
 
@@ -34,7 +34,7 @@ export function SettingsDialog({ onClose }: Props) {
         </div>
         <div style={body}>
           {tab === 'models' && <ModelStatus />}
-          {tab === 'design' && <DesignStylePanel projectId="" onSave={() => setSaved('风格已保存')} />}
+          {tab === 'design' && <DesignStylePanel projectId={projectId} onSave={() => setSaved('风格已保存')} />}
           {tab === 'skin' && <SkinPicker />}
         </div>
         {saved && <div style={msg}>{saved}</div>}
