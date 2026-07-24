@@ -1,22 +1,19 @@
 // LibraryBrowser.tsx — 资源库（Template + Resource + Sound + Plugin 四合一）
-// 从 OpenChatCut src/library/ 简化合并
-
 import { useState, useEffect } from 'react';
 
-export function LibraryBrowser() {
+export function LibraryBrowser({ projectId }: { projectId: string }) {
   const [tab, setTab] = useState<'templates' | 'resources' | 'sounds' | 'plugins'>('templates');
   return (
     <div style={wrap}>
       <div style={tabBar}>
         {(['templates','resources','sounds','plugins'] as const).map(t => (
-          <button key={t} onClick={() => setTab(t)}
-            style={{...tb,...(tab===t?tbActive:{})}}>
+          <button key={t} onClick={() => setTab(t)} style={{...tb,...(tab===t?tbActive:{})}}>
             {{templates:'🎬 模板',resources:'📦 资源',sounds:'🔊 音效',plugins:'🔌 插件'}[t]}
           </button>
         ))}
       </div>
       <div style={body}>
-        {tab === 'templates' && <TemplateList />}
+        {tab === 'templates' && <TemplateList projectId={projectId} />}
         {tab === 'resources' && <ResourceList />}
         {tab === 'sounds' && <SoundList />}
         {tab === 'plugins' && <PluginList />}
@@ -25,17 +22,17 @@ export function LibraryBrowser() {
   );
 }
 
-function TemplateList() {
+function TemplateList({ projectId }: { projectId: string }) {
   const [cats, setCats] = useState<Record<string,number>>({});
   useEffect(() => {
-    fetch('/api/templates').then(r=>r.json()).then(d => {
-      setCats(d.categories ?? {});
-    }).catch(()=>{});
+    fetch('/api/templates').then(r=>r.json()).then(d => setCats(d.categories ?? {})).catch(()=>{});
   }, []);
   return (
     <div style={grid}>
       {Object.entries(cats).map(([k,v]) => (
-        <div key={k} style={card}>
+        <div key={k} style={{...card,cursor:'pointer'}} onClick={async () => {
+          try { await fetch('/api/mcp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'add_motion_graphic',arguments:{project_id:projectId,template_name:k}}})}); } catch {}
+        }}>
           <span style={cardName}>{k.replace(/-/g,' ')}</span>
           <span style={cardCount}>{v}</span>
         </div>
@@ -45,11 +42,7 @@ function TemplateList() {
 }
 
 function ResourceList() {
-  const items = [
-    { name:'叠加层', count:20 }, { name:'背景', count:15 },
-    { name:'边框', count:12 }, { name:'LUT', count:8 },
-    { name:'粒子', count:10 },
-  ];
+  const items = [{name:'叠加层',count:20},{name:'背景',count:15},{name:'边框',count:12},{name:'LUT',count:8},{name:'粒子',count:10}];
   return <div style={grid}>{items.map(i=><div key={i.name} style={card}><span style={cardName}>{i.name}</span><span style={cardCount}>{i.count}</span></div>)}</div>;
 }
 

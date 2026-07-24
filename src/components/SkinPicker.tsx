@@ -2,11 +2,11 @@
 import { useState, useEffect } from 'react';
 
 const skins = [
-  { id: 'dark', name: '暗夜', accent: '#e94560', bg: '#0f0f1a' },
-  { id: 'ocean', name: '深海', accent: '#3b82f6', bg: '#0a1929' },
-  { id: 'forest', name: '森林', accent: '#22c55e', bg: '#0d1f0d' },
-  { id: 'sunset', name: '日落', accent: '#f59e0b', bg: '#1a1005' },
-  { id: 'purple', name: '紫夜', accent: '#a855f7', bg: '#150a20' },
+  { id: 'dark', name:'暗夜', accent:'#dc7036', bg:'#101010', hover:'#2c2c2c', track:'#25262b', panel:'#181818' },
+  { id: 'ocean', name:'深海', accent:'#3b82f6', bg:'#0a1929', hover:'#1a2d4a', track:'#14253d', panel:'#0d1b2a' },
+  { id: 'forest', name:'森林', accent:'#22c55e', bg:'#0d1f0d', hover:'#1a331a', track:'#152a15', panel:'#0f220f' },
+  { id: 'sunset', name:'日落', accent:'#f59e0b', bg:'#1a1005', hover:'#33230f', track:'#2a1c08', panel:'#1c1207' },
+  { id: 'purple', name:'紫夜', accent:'#a855f7', bg:'#150a20', hover:'#2a1540', track:'#200f30', panel:'#170b22' },
 ];
 
 export function SkinPicker() {
@@ -15,9 +15,15 @@ export function SkinPicker() {
 
   const applySkin = (id: string) => {
     const s = skins.find(sk => sk.id === id) || skins[0];
-    const root = document.documentElement;
-    root.style.setProperty('--accent', s.accent);
-    root.style.setProperty('--bg', s.bg);
+    const r = document.documentElement.style;
+    // Match the CSS variable names from index.css
+    r.setProperty('--cc-accent', s.accent);
+    r.setProperty('--cc-accent-deep', s.accent + 'cc');
+    r.setProperty('--cc-bg', s.bg);
+    r.setProperty('--cc-panel', s.panel);
+    r.setProperty('--cc-panel-alt', s.panel);
+    r.setProperty('--cc-hover', s.hover);
+    r.setProperty('--cc-tl-track', s.track);
     localStorage.setItem('honcut-skin', id);
     setActive(id);
   };

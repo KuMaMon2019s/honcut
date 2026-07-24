@@ -16,19 +16,21 @@ export function DesignStylePanel({ projectId, onSave }: Props) {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await fetch('/api/mcp', {
+      const colorsObj = JSON.parse(colors);
+      const fontsObj = JSON.parse(fonts);
+      const resp = await fetch('/api/mcp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           jsonrpc: '2.0', id: 1, method: 'tools/call',
           params: { name: 'manage_design_style', arguments: {
             project_id: projectId, action: 'apply',
-            name: 'current', colors, fonts,
+            name: 'current', colors: colorsObj, fonts: fontsObj,
           }},
         }),
       });
-      onSave?.();
-    } catch {}
+      if (resp.ok) onSave?.();
+    } catch (e) { alert('保存失败: ' + (e as Error).message); }
     setSaving(false);
   };
 
