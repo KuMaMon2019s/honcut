@@ -117,6 +117,17 @@ type Marker struct {
 	CreatedAt string `json:"created_at"`
 }
 
+// CaptionCue represents a single caption/subtitle cue on the timeline
+type CaptionCue struct {
+	ID             string `json:"id"`
+	ProjectID      string `json:"project_id"`
+	StartFrame     int    `json:"start_frame"`
+	DurationFrames int    `json:"duration_frames"`
+	Text           string `json:"text"`
+	Style          string `json:"style"` // JSON-encoded CaptionStyle
+	CreatedAt      string `json:"created_at"`
+}
+
 // Store handles SQLite persistence for projects
 type Store struct {
 	db *sql.DB
@@ -236,6 +247,17 @@ func NewStore(dbPath string) (*Store, error) {
 		label       TEXT DEFAULT '',
 		color       TEXT DEFAULT '#facc15',
 		created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+	);
+
+	CREATE TABLE IF NOT EXISTS captions (
+		id              TEXT PRIMARY KEY,
+		project_id      TEXT NOT NULL,
+		start_frame     INTEGER NOT NULL DEFAULT 0,
+		duration_frames INTEGER NOT NULL DEFAULT 48,
+		text            TEXT NOT NULL DEFAULT '',
+		style           TEXT DEFAULT '{}',
+		created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 	);`
 	if _, err := db.Exec(createSQL); err != nil {
@@ -1116,6 +1138,95 @@ func (s *Store) DeleteMarker(id string) (bool, error) {
 	res, err := s.db.Exec("DELETE FROM markers WHERE id = ?", id)
 	if err != nil {
 		return false, fmt.Errorf("delete marker: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ── Captions ────────────────────────────────────────────────────────────
+
+// CreateCaption inserts a new caption cue.
+func (s *Store) CreateCaption(c *CaptionCue) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	c.CreatedAt = now
+	_, err := s.db.Exec(
+		"INSERT INTO captions (id, project_id, start_frame, duration_frames, text, style, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		c.ID, c.ProjectID, c.StartFrame, c.DurationFrames, c.Text, c.Style, now,
+	)
+	if err != nil {
+		return fmt.Errorf("insert caption: %w", err)
+	}
+	return nil
+}
+
+// ListCaptions returns all captions for a project, ordered by start_frame.
+func (s *Store) ListCaptions(projectID string) ([]*CaptionCue, error) {
+	rows, err := s.db.Query("SELECT id, project_id, start_frame, duration_frames, text, style, created_at FROM captions WHERE project_id = ? ORDER BY start_frame", projectID)
+	if err != nil {
+		return nil, fmt.Errorf("list captions: %w", err)
+	}
+	defer rows.Close()
+
+	var captions []*CaptionCue
+	for rows.Next() {
+		var c CaptionCue
+		if err := rows.Scan(&c.ID, &c.ProjectID, &c.StartFrame, &c.DurationFrames, &c.Text, &c.Style, &c.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan caption: %w", err)
+		}
+		captions = append(captions, &c)
+	}
+	return captions, rows.Err()
+}
+
+// GetCaption retrieves a caption by ID. Returns nil, nil when not found.
+func (s *Store) GetCaption(id string) (*CaptionCue, error) {
+	row := s.db.QueryRow("SELECT id, project_id, start_frame, duration_frames, text, style, created_at FROM captions WHERE id = ?", id)
+	var c CaptionCue
+	if err := row.Scan(&c.ID, &c.ProjectID, &c.StartFrame, &c.DurationFrames, &c.Text, &c.Style, &c.CreatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("query caption: %w", err)
+	}
+	return &c, nil
+}
+
+// UpdateCaption updates a caption's fields.
+func (s *Store) UpdateCaption(id string, startFrame *int, durationFrames *int, text *string, style *string) error {
+	c, err := s.GetCaption(id)
+	if err != nil {
+		return err
+	}
+	if c == nil {
+		return fmt.Errorf("caption not found: %s", id)
+	}
+	if startFrame != nil {
+		c.StartFrame = *startFrame
+	}
+	if durationFrames != nil {
+		c.DurationFrames = *durationFrames
+	}
+	if text != nil {
+		c.Text = *text
+	}
+	if style != nil {
+		c.Style = *style
+	}
+	_, err = s.db.Exec(
+		"UPDATE captions SET start_frame = ?, duration_frames = ?, text = ?, style = ? WHERE id = ?",
+		c.StartFrame, c.DurationFrames, c.Text, c.Style, id,
+	)
+	if err != nil {
+		return fmt.Errorf("update caption: %w", err)
+	}
+	return nil
+}
+
+// DeleteCaption removes a caption. Returns true if a row was deleted.
+func (s *Store) DeleteCaption(id string) (bool, error) {
+	res, err := s.db.Exec("DELETE FROM captions WHERE id = ?", id)
+	if err != nil {
+		return false, fmt.Errorf("delete caption: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil

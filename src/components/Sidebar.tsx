@@ -74,7 +74,7 @@ export default function Sidebar({ projectId, selectedClip, onClipUpdated, onPrev
       {/* ═══ 面板内容 ═══ */}
       <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
         {tab === "pool" ? (
-          <MediaPoolPanel projectId={projectId} onPreview={onPreview} />
+          <MediaPoolPanel projectId={projectId} onPreview={onPreview} onClipsChanged={onClipUpdated} />
         ) : (
           <LibraryPanel
             projectId={projectId}

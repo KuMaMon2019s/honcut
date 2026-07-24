@@ -179,6 +179,40 @@ export interface MCPResponse {
   error?: { code: number; message: string };
 }
 
+// ── P7: Scene Detection / Transcription types ──────────────────────────
+
+export interface SceneResult {
+  index: number;
+  start_seconds: number;
+  end_seconds: number;
+  start_frame: number;
+  end_frame: number;
+}
+
+export interface DetectScenesResponse {
+  scenes: SceneResult[];
+  fps: number;
+}
+
+export interface AutoSplitResponse {
+  clips: Clip[];
+  count: number;
+}
+
+export interface TranscriptionSegment {
+  start: number;
+  end: number;
+  text: string;
+  start_frame: number;
+  end_frame: number;
+}
+
+export interface TranscribeResponse {
+  segments: TranscriptionSegment[];
+  language: string;
+  mock?: boolean;
+}
+
 // ── 请求体类型 ──────────────────────────────────────────────────────────
 
 export interface CreateProjectBody {
@@ -270,6 +304,25 @@ export interface UpdateMarkerBody {
   frame?: number;
   label?: string;
   color?: string;
+}
+
+// ── P7 请求体 ──────────────────────────────────────────────────────────
+
+export interface DetectScenesBody {
+  asset_id: string;
+  method?: string;
+  threshold?: number;
+  min_scene_length?: number;
+}
+
+export interface AutoSplitBody {
+  asset_id: string;
+  scenes?: SceneResult[];
+}
+
+export interface TranscribeBody {
+  asset_id: string;
+  language?: string;
 }
 
 // ── 工具函数 ────────────────────────────────────────────────────────────
@@ -537,6 +590,22 @@ class HoncutClient {
       method: "POST",
       ...jsonBody({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
     });
+  }
+
+  // ── P7: Scene Detection ──
+
+  detectScenes(projectId: string, body: DetectScenesBody): Promise<DetectScenesResponse> {
+    return request<DetectScenesResponse>(`/api/projects/${enc(projectId)}/detect-scenes`, { method: "POST", ...jsonBody(body) });
+  }
+
+  autoSplit(projectId: string, body: AutoSplitBody): Promise<AutoSplitResponse> {
+    return request<AutoSplitResponse>(`/api/projects/${enc(projectId)}/auto-split`, { method: "POST", ...jsonBody(body) });
+  }
+
+  // ── P7: Transcription ──
+
+  transcribe(projectId: string, body: TranscribeBody): Promise<TranscribeResponse> {
+    return request<TranscribeResponse>(`/api/projects/${enc(projectId)}/transcribe`, { method: "POST", ...jsonBody(body) });
   }
 }
 

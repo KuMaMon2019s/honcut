@@ -1,13 +1,17 @@
 package honcutserver
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"honcut-server/internal/render"
@@ -154,6 +158,20 @@ func APIHandler(store *Store, pm *render.ProgressManager, outputDir string) http
 		deleteMarker(w, r, store, r.PathValue("id"), r.PathValue("marker_id"))
 	})
 
+	// Captions
+	mux.HandleFunc("GET /api/projects/{id}/captions", func(w http.ResponseWriter, r *http.Request) {
+		listCaptions(w, r, store, r.PathValue("id"))
+	})
+	mux.HandleFunc("POST /api/projects/{id}/captions", func(w http.ResponseWriter, r *http.Request) {
+		createCaption(w, r, store, r.PathValue("id"))
+	})
+	mux.HandleFunc("PATCH /api/projects/{id}/captions/{caption_id}", func(w http.ResponseWriter, r *http.Request) {
+		updateCaption(w, r, store, r.PathValue("id"), r.PathValue("caption_id"))
+	})
+	mux.HandleFunc("DELETE /api/projects/{id}/captions/{caption_id}", func(w http.ResponseWriter, r *http.Request) {
+		deleteCaption(w, r, store, r.PathValue("id"), r.PathValue("caption_id"))
+	})
+
 	mux.HandleFunc("GET /api/projects/{id}/assets", func(w http.ResponseWriter, r *http.Request) {
 		listAssets(w, r, store, r.PathValue("id"))
 	})
@@ -188,6 +206,24 @@ func APIHandler(store *Store, pm *render.ProgressManager, outputDir string) http
 	// MCP HTTP endpoint
 	mux.HandleFunc("POST /api/mcp", func(w http.ResponseWriter, r *http.Request) {
 		handleMCPHTTP(w, r, mcpServer)
+	})
+
+	// P7: Scene detection + auto-split
+	mux.HandleFunc("POST /api/projects/{id}/detect-scenes", func(w http.ResponseWriter, r *http.Request) {
+		detectScenes(w, r, store, r.PathValue("id"))
+	})
+	mux.HandleFunc("POST /api/projects/{id}/auto-split", func(w http.ResponseWriter, r *http.Request) {
+		autoSplit(w, r, store, r.PathValue("id"))
+	})
+
+	// P7: Transcription (ASR)
+	mux.HandleFunc("POST /api/projects/{id}/transcribe", func(w http.ResponseWriter, r *http.Request) {
+		transcribe(w, r, store, r.PathValue("id"))
+	})
+
+	// P7: Mobile upload page (standalone HTML)
+	mux.HandleFunc("GET /mobile", func(w http.ResponseWriter, r *http.Request) {
+		mobileUploadPage(w, r)
 	})
 
 	// Static file server for uploaded media
@@ -1244,6 +1280,97 @@ func deleteMarker(w http.ResponseWriter, r *http.Request, store *Store, projectI
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ── Captions ────────────────────────────────────────────────────────────
+
+type captionCreateRequest struct {
+	StartFrame     int    `json:"start_frame"`
+	DurationFrames int    `json:"duration_frames"`
+	Text           string `json:"text"`
+	Style          string `json:"style"`
+}
+
+type captionUpdateRequest struct {
+	StartFrame     *int    `json:"start_frame"`
+	DurationFrames *int    `json:"duration_frames"`
+	Text           *string `json:"text"`
+	Style          *string `json:"style"`
+}
+
+func listCaptions(w http.ResponseWriter, r *http.Request, store *Store, projectID string) {
+	captions, err := store.ListCaptions(projectID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(captions)
+}
+
+func createCaption(w http.ResponseWriter, r *http.Request, store *Store, projectID string) {
+	var req captionCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if req.DurationFrames <= 0 {
+		req.DurationFrames = 48
+	}
+	if req.Style == "" {
+		req.Style = "{}"
+	}
+
+	c := &CaptionCue{
+		ID:             uuid.New().String(),
+		ProjectID:      projectID,
+		StartFrame:     req.StartFrame,
+		DurationFrames: req.DurationFrames,
+		Text:           req.Text,
+		Style:          req.Style,
+	}
+
+	if err := store.CreateCaption(c); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(c)
+}
+
+func updateCaption(w http.ResponseWriter, r *http.Request, store *Store, projectID, captionID string) {
+	var req captionUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	if err := store.UpdateCaption(captionID, req.StartFrame, req.DurationFrames, req.Text, req.Style); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	c, err := store.GetCaption(captionID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(c)
+}
+
+func deleteCaption(w http.ResponseWriter, r *http.Request, store *Store, projectID, captionID string) {
+	deleted, err := store.DeleteCaption(captionID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !deleted {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func listAssets(w http.ResponseWriter, r *http.Request, store *Store, projectID string) {
 	assets, err := store.ListAssets(projectID)
 	if err != nil {
@@ -1565,4 +1692,613 @@ func deleteTransition(w http.ResponseWriter, r *http.Request, store *Store, proj
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ── P7: Scene Detection + Auto-Split + Transcription + Mobile ──────────
+
+// resolveAssetPath converts an asset's src (e.g. "/uploads/xxx.mp4") to a filesystem path.
+func resolveAssetPath(src string) string {
+	homeDir, _ := os.UserHomeDir()
+	uploadDir := filepath.Join(homeDir, ".honcut", "uploads")
+	return filepath.Join(uploadDir, strings.TrimPrefix(src, "/uploads/"))
+}
+
+// getProjectFPS returns the fps from the project's first timeline, defaulting to 30.
+func getProjectFPS(store *Store, projectID string) int {
+	timelines, err := store.ListTimelines(projectID)
+	if err == nil && len(timelines) > 0 && timelines[0].FPS > 0 {
+		return timelines[0].FPS
+	}
+	return 30
+}
+
+type detectScenesRequest struct {
+	AssetID        string  `json:"asset_id"`
+	Method         string  `json:"method"`
+	Threshold      float64 `json:"threshold"`
+	MinSceneLength float64 `json:"min_scene_length"`
+}
+
+type sceneResult struct {
+	Index        int     `json:"index"`
+	StartSeconds float64 `json:"start_seconds"`
+	EndSeconds   float64 `json:"end_seconds"`
+	StartFrame   int     `json:"start_frame"`
+	EndFrame     int     `json:"end_frame"`
+}
+
+func detectScenes(w http.ResponseWriter, r *http.Request, store *Store, projectID string) {
+	var req detectScenesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if req.AssetID == "" {
+		http.Error(w, "asset_id required", http.StatusBadRequest)
+		return
+	}
+	if req.Threshold <= 0 {
+		req.Threshold = 0.3
+	}
+	if req.MinSceneLength <= 0 {
+		req.MinSceneLength = 1.0
+	}
+
+	asset, err := store.GetAsset(req.AssetID)
+	if err != nil || asset == nil {
+		http.Error(w, "asset not found", http.StatusNotFound)
+		return
+	}
+
+	filePath := resolveAssetPath(asset.Src)
+	if _, err := os.Stat(filePath); err != nil {
+		http.Error(w, "media file not found: "+filePath, http.StatusNotFound)
+		return
+	}
+
+	fps := getProjectFPS(store, projectID)
+
+	// Run ffmpeg scene detection filter
+	thresholdStr := strconv.FormatFloat(req.Threshold, 'f', -1, 64)
+	filter := fmt.Sprintf("select='gt(scene,%s)',showinfo", thresholdStr)
+	cmd := exec.Command("ffmpeg", "-i", filePath, "-vf", filter, "-f", "null", "-")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	_ = cmd.Run() // ffmpeg exits non-zero with -f null, ignore
+
+	// Parse pts_time from stderr
+	re := regexp.MustCompile(`pts_time:(\d+\.?\d*)`)
+	matches := re.FindAllStringSubmatch(stderr.String(), -1)
+
+	var cutPoints []float64
+	for _, m := range matches {
+		t, err := strconv.ParseFloat(m[1], 64)
+		if err != nil {
+			continue
+		}
+		cutPoints = append(cutPoints, t)
+	}
+
+	// Filter by min_scene_length
+	var filtered []float64
+	last := -req.MinSceneLength
+	for _, t := range cutPoints {
+		if t-last >= req.MinSceneLength {
+			filtered = append(filtered, t)
+			last = t
+		}
+	}
+
+	// Get video duration via ffprobe
+	duration := 0.0
+	probeCmd := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1", filePath)
+	var probeOut bytes.Buffer
+	probeCmd.Stdout = &probeOut
+	if err := probeCmd.Run(); err == nil {
+		if d, err := strconv.ParseFloat(strings.TrimSpace(probeOut.String()), 64); err == nil {
+			duration = d
+		}
+	}
+
+	// Build scenes
+	var scenes []sceneResult
+	prev := 0.0
+	idx := 0
+	for _, cut := range filtered {
+		if cut <= prev {
+			continue
+		}
+		scenes = append(scenes, sceneResult{
+			Index:        idx,
+			StartSeconds: prev,
+			EndSeconds:   cut,
+			StartFrame:   int(prev * float64(fps)),
+			EndFrame:     int(cut * float64(fps)),
+		})
+		prev = cut
+		idx++
+	}
+	// Last scene: from last cut to end
+	if duration > prev {
+		scenes = append(scenes, sceneResult{
+			Index:        idx,
+			StartSeconds: prev,
+			EndSeconds:   duration,
+			StartFrame:   int(prev * float64(fps)),
+			EndFrame:     int(duration * float64(fps)),
+		})
+	}
+
+	// If no cuts detected, return the whole video as one scene
+	if len(scenes) == 0 && duration > 0 {
+		scenes = append(scenes, sceneResult{
+			Index:        0,
+			StartSeconds: 0,
+			EndSeconds:   duration,
+			StartFrame:   0,
+			EndFrame:     int(duration * float64(fps)),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"scenes": scenes,
+		"fps":    fps,
+	})
+}
+
+type autoSplitRequest struct {
+	AssetID string        `json:"asset_id"`
+	Scenes  []sceneResult `json:"scenes"`
+}
+
+func autoSplit(w http.ResponseWriter, r *http.Request, store *Store, projectID string) {
+	var req autoSplitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if req.AssetID == "" {
+		http.Error(w, "asset_id required", http.StatusBadRequest)
+		return
+	}
+
+	asset, err := store.GetAsset(req.AssetID)
+	if err != nil || asset == nil {
+		http.Error(w, "asset not found", http.StatusNotFound)
+		return
+	}
+
+	fps := getProjectFPS(store, projectID)
+	scenes := req.Scenes
+
+	// If no scenes provided, run detection first
+	if len(scenes) == 0 {
+		filePath := resolveAssetPath(asset.Src)
+		if _, err := os.Stat(filePath); err != nil {
+			http.Error(w, "media file not found", http.StatusNotFound)
+			return
+		}
+		cmd := exec.Command("ffmpeg", "-i", filePath, "-vf", "select='gt(scene,0.3)',showinfo", "-f", "null", "-")
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		_ = cmd.Run()
+
+		re := regexp.MustCompile(`pts_time:(\d+\.?\d*)`)
+		matches := re.FindAllStringSubmatch(stderr.String(), -1)
+		var cutPoints []float64
+		for _, m := range matches {
+			if t, err := strconv.ParseFloat(m[1], 64); err == nil {
+				cutPoints = append(cutPoints, t)
+			}
+		}
+
+		probeCmd := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration",
+			"-of", "default=noprint_wrappers=1:nokey=1", filePath)
+		var probeOut bytes.Buffer
+		probeCmd.Stdout = &probeOut
+		duration := 0.0
+		if err := probeCmd.Run(); err == nil {
+			if d, err := strconv.ParseFloat(strings.TrimSpace(probeOut.String()), 64); err == nil {
+				duration = d
+			}
+		}
+
+		prev := 0.0
+		idx := 0
+		for _, cut := range cutPoints {
+			if cut <= prev {
+				continue
+			}
+			scenes = append(scenes, sceneResult{
+				Index: idx, StartSeconds: prev, EndSeconds: cut,
+				StartFrame: int(prev * float64(fps)), EndFrame: int(cut * float64(fps)),
+			})
+			prev = cut
+			idx++
+		}
+		if duration > prev {
+			scenes = append(scenes, sceneResult{
+				Index: idx, StartSeconds: prev, EndSeconds: duration,
+				StartFrame: int(prev * float64(fps)), EndFrame: int(duration * float64(fps)),
+			})
+		}
+		if len(scenes) == 0 && duration > 0 {
+			scenes = append(scenes, sceneResult{
+				Index: 0, StartSeconds: 0, EndSeconds: duration,
+				StartFrame: 0, EndFrame: int(duration * float64(fps)),
+			})
+		}
+	}
+
+	// Find end of V1 track to append clips
+	existingClips, _ := store.ListTimelineItemsByTrack(projectID, "V1")
+	endFrame := 0
+	for _, c := range existingClips {
+		if c.StartFrame+c.DurationFrames > endFrame {
+			endFrame = c.StartFrame + c.DurationFrames
+		}
+	}
+
+	// Create clips for each scene
+	var created []*TimelineItem
+	currentFrame := endFrame
+	for i, scene := range scenes {
+		durationFrames := scene.EndFrame - scene.StartFrame
+		if durationFrames <= 0 {
+			continue
+		}
+		clip := &TimelineItem{
+			ID:             uuid.New().String(),
+			ProjectID:      projectID,
+			AssetID:        req.AssetID,
+			Name:           fmt.Sprintf("%s (scene %d)", asset.Name, i+1),
+			Kind:           asset.Kind,
+			Src:            asset.Src,
+			Track:          "V1",
+			StartFrame:     currentFrame,
+			DurationFrames: durationFrames,
+			SrcInFrame:     scene.StartFrame,
+			Props:          "{}",
+		}
+		if err := store.CreateTimelineItem(clip); err != nil {
+			http.Error(w, "failed to create clip: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		created = append(created, clip)
+		currentFrame += durationFrames
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"clips": created,
+		"count": len(created),
+	})
+}
+
+// ── P7: Transcription ──────────────────────────────────────────────────
+
+type transcribeRequest struct {
+	AssetID  string `json:"asset_id"`
+	Language string `json:"language"`
+}
+
+type transcriptionSegment struct {
+	Start      float64 `json:"start"`
+	End        float64 `json:"end"`
+	Text       string  `json:"text"`
+	StartFrame int     `json:"start_frame"`
+	EndFrame   int     `json:"end_frame"`
+}
+
+func transcribe(w http.ResponseWriter, r *http.Request, store *Store, projectID string) {
+	var req transcribeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if req.AssetID == "" {
+		http.Error(w, "asset_id required", http.StatusBadRequest)
+		return
+	}
+	if req.Language == "" {
+		req.Language = "auto"
+	}
+
+	asset, err := store.GetAsset(req.AssetID)
+	if err != nil || asset == nil {
+		http.Error(w, "asset not found", http.StatusNotFound)
+		return
+	}
+
+	fps := getProjectFPS(store, projectID)
+	arkKey := os.Getenv("ARK_API_KEY")
+
+	// Mock mode: return sample data when ARK_API_KEY is not set
+	if arkKey == "" {
+		segments := []transcriptionSegment{
+			{Start: 0.0, End: 2.5, Text: "欢迎使用 Honcut 视频编辑器", StartFrame: 0, EndFrame: int(2.5 * float64(fps))},
+			{Start: 2.5, End: 5.0, Text: "这是一段示例转录文本", StartFrame: int(2.5 * float64(fps)), EndFrame: int(5.0 * float64(fps))},
+			{Start: 5.0, End: 8.0, Text: "支持自动语音识别功能", StartFrame: int(5.0 * float64(fps)), EndFrame: int(8.0 * float64(fps))},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"segments": segments,
+			"language": "zh",
+			"mock":     true,
+		})
+		return
+	}
+
+	// Real ASR: extract audio with ffmpeg, then call Volcano Engine ASR API
+	filePath := resolveAssetPath(asset.Src)
+	if _, err := os.Stat(filePath); err != nil {
+		http.Error(w, "media file not found", http.StatusNotFound)
+		return
+	}
+
+	// Extract audio to temp WAV (16kHz mono PCM)
+	tmpWav := filepath.Join(os.TempDir(), fmt.Sprintf("honcut_asr_%s.wav", uuid.New().String()[:8]))
+	defer os.Remove(tmpWav)
+
+	extractCmd := exec.Command("ffmpeg", "-y", "-i", filePath, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", tmpWav)
+	var extractErr bytes.Buffer
+	extractCmd.Stderr = &extractErr
+	if err := extractCmd.Run(); err != nil {
+		http.Error(w, "audio extraction failed: "+extractErr.String(), http.StatusInternalServerError)
+		return
+	}
+
+	audioData, err := os.ReadFile(tmpWav)
+	if err != nil {
+		http.Error(w, "failed to read extracted audio", http.StatusInternalServerError)
+		return
+	}
+
+	// Call Volcano Engine ASR API (doubao-seed-asr-2.0)
+	baseURL := os.Getenv("ARK_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://ark.cn-beijing.volces.com/api/plan/v3"
+	}
+
+	asrPayload := map[string]interface{}{
+		"model": "doubao-seed-asr-2.0",
+		"audio": base64.StdEncoding.EncodeToString(audioData),
+		"format": "wav",
+		"sample_rate": 16000,
+	}
+	if req.Language != "auto" {
+		asrPayload["language"] = req.Language
+	}
+
+	payloadBytes, _ := json.Marshal(asrPayload)
+	asrReq, err := http.NewRequest("POST", baseURL+"/audio/transcriptions", bytes.NewReader(payloadBytes))
+	if err != nil {
+		http.Error(w, "failed to create ASR request", http.StatusInternalServerError)
+		return
+	}
+	asrReq.Header.Set("Content-Type", "application/json")
+	asrReq.Header.Set("Authorization", "Bearer "+arkKey)
+
+	client := &http.Client{}
+	resp, err := client.Do(asrReq)
+	if err != nil {
+		http.Error(w, "ASR API call failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, fmt.Sprintf("ASR API error %d: %s", resp.StatusCode, string(respBody)), http.StatusBadGateway)
+		return
+	}
+
+	// Parse ASR response — expect {"text": "...", "segments": [...]}
+	var asrResult struct {
+		Text     string `json:"text"`
+		Language string `json:"language"`
+		Segments []struct {
+			Start float64 `json:"start"`
+			End   float64 `json:"end"`
+			Text  string  `json:"text"`
+		} `json:"segments"`
+	}
+	if err := json.Unmarshal(respBody, &asrResult); err != nil {
+		// Fallback: treat entire response as plain text
+		var plainResult struct {
+			Text string `json:"text"`
+		}
+		if err2 := json.Unmarshal(respBody, &plainResult); err2 == nil && plainResult.Text != "" {
+			asrResult.Text = plainResult.Text
+		} else {
+			http.Error(w, "failed to parse ASR response", http.StatusBadGateway)
+			return
+		}
+	}
+
+	lang := asrResult.Language
+	if lang == "" {
+		lang = "zh"
+	}
+
+	var segments []transcriptionSegment
+	if len(asrResult.Segments) > 0 {
+		for _, s := range asrResult.Segments {
+			segments = append(segments, transcriptionSegment{
+				Start:      s.Start,
+				End:        s.End,
+				Text:       s.Text,
+				StartFrame: int(s.Start * float64(fps)),
+				EndFrame:   int(s.End * float64(fps)),
+			})
+		}
+	} else if asrResult.Text != "" {
+		// Single segment for the whole text
+		segments = append(segments, transcriptionSegment{
+			Start: 0, End: 0, Text: asrResult.Text,
+			StartFrame: 0, EndFrame: 0,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"segments": segments,
+		"language": lang,
+	})
+}
+
+// ── P7: Mobile Upload Page ─────────────────────────────────────────────
+
+func mobileUploadPage(w http.ResponseWriter, r *http.Request) {
+	projectID := r.URL.Query().Get("project")
+	if projectID == "" {
+		projectID = "default"
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Honcut 手机上传</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#111;color:#eee;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:20px}
+h1{font-size:22px;margin:16px 0 4px;color:#f59e0b}
+.sub{font-size:13px;color:#888;margin-bottom:24px}
+.drop-zone{width:100%;max-width:400px;min-height:200px;border:2px dashed #444;border-radius:16px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;cursor:pointer;transition:all .2s;background:#1a1a1a;margin-bottom:16px}
+.drop-zone.dragover{border-color:#f59e0b;background:#221a00}
+.drop-zone .icon{font-size:48px}
+.drop-zone .text{font-size:14px;color:#aaa;text-align:center;padding:0 16px}
+.btn{width:100%;max-width:400px;padding:16px;border:none;border-radius:12px;font-size:16px;font-weight:600;cursor:pointer;margin-bottom:10px;transition:all .15s}
+.btn-primary{background:#f59e0b;color:#111}
+.btn-primary:active{background:#d97706}
+.btn-secondary{background:#2a2a2a;color:#eee;border:1px solid #444}
+.btn-secondary:active{background:#333}
+.progress-wrap{width:100%;max-width:400px;margin:16px 0;display:none}
+.progress-bar{width:100%;height:8px;background:#333;border-radius:4px;overflow:hidden}
+.progress-fill{height:100%;background:#f59e0b;border-radius:4px;transition:width .3s;width:0}
+.progress-text{font-size:12px;color:#888;margin-top:6px;text-align:center}
+.status{width:100%;max-width:400px;padding:12px;border-radius:8px;font-size:14px;text-align:center;margin-top:8px;display:none}
+.status.ok{display:block;background:#0a2a0a;color:#4ade80;border:1px solid #166534}
+.status.err{display:block;background:#2a0a0a;color:#f87171;border:1px solid #991b1b}
+.file-list{width:100%;max-width:400px;margin-top:12px}
+.file-item{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#1e1e1e;border-radius:8px;margin-bottom:6px;font-size:13px}
+.file-item .name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-item .size{color:#888;font-size:11px;flex-shrink:0}
+input[type=file]{display:none}
+</style>
+</head>
+<body>
+<h1>📱 Honcut 上传</h1>
+<div class="sub">项目: `+projectID+`</div>
+
+<div class="drop-zone" id="dropZone">
+  <div class="icon">📁</div>
+  <div class="text">拖拽文件到此处<br>或点击选择文件</div>
+</div>
+
+<button class="btn btn-primary" id="pickBtn">📷 选择文件 / 拍照录像</button>
+<button class="btn btn-secondary" id="cameraBtn">🎥 直接拍照/录像</button>
+
+<input type="file" id="fileInput" accept="video/*,image/*,audio/*" multiple>
+<input type="file" id="cameraInput" accept="video/*,image/*" capture="environment">
+
+<div class="progress-wrap" id="progressWrap">
+  <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+  <div class="progress-text" id="progressText">上传中… 0%</div>
+</div>
+
+<div class="status" id="statusMsg"></div>
+<div class="file-list" id="fileList"></div>
+
+<script>
+var projectId = `+"`"+projectID+"`"+`;
+var dropZone = document.getElementById('dropZone');
+var fileInput = document.getElementById('fileInput');
+var cameraInput = document.getElementById('cameraInput');
+var progressWrap = document.getElementById('progressWrap');
+var progressFill = document.getElementById('progressFill');
+var progressText = document.getElementById('progressText');
+var statusMsg = document.getElementById('statusMsg');
+var fileList = document.getElementById('fileList');
+
+document.getElementById('pickBtn').onclick = function(){ fileInput.click(); };
+document.getElementById('cameraBtn').onclick = function(){ cameraInput.click(); };
+dropZone.onclick = function(){ fileInput.click(); };
+
+dropZone.ondragover = function(e){ e.preventDefault(); dropZone.classList.add('dragover'); };
+dropZone.ondragleave = function(){ dropZone.classList.remove('dragover'); };
+dropZone.ondrop = function(e){ e.preventDefault(); dropZone.classList.remove('dragover'); if(e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files); };
+
+fileInput.onchange = function(){ if(this.files.length) uploadFiles(this.files); this.value=''; };
+cameraInput.onchange = function(){ if(this.files.length) uploadFiles(this.files); this.value=''; };
+
+function fmtSize(b){ if(b>1048576) return (b/1048576).toFixed(1)+'MB'; if(b>1024) return (b/1024).toFixed(1)+'KB'; return b+'B'; }
+
+function uploadFiles(files){
+  statusMsg.className='status'; statusMsg.style.display='none';
+  for(var i=0;i<files.length;i++){
+    (function(file){
+      var item = document.createElement('div');
+      item.className='file-item';
+      item.innerHTML='<span>📄</span><span class="name">'+file.name+'</span><span class="size">'+fmtSize(file.size)+'</span>';
+      fileList.appendChild(item);
+      uploadOne(file, item);
+    })(files[i]);
+  }
+}
+
+function uploadOne(file, itemEl){
+  var kind = 'video';
+  if(file.type.indexOf('image')===0) kind='image';
+  else if(file.type.indexOf('audio')===0) kind='audio';
+
+  var form = new FormData();
+  form.append('file', file);
+  form.append('name', file.name);
+  form.append('kind', kind);
+
+  var xhr = new XMLHttpRequest();
+  progressWrap.style.display='block';
+  progressFill.style.width='0%';
+  progressText.textContent='上传中… 0%';
+
+  xhr.upload.onprogress = function(e){
+    if(e.lengthComputable){
+      var pct = Math.round(e.loaded/e.total*100);
+      progressFill.style.width=pct+'%';
+      progressText.textContent='上传中… '+pct+'%';
+    }
+  };
+  xhr.onload = function(){
+    progressWrap.style.display='none';
+    if(xhr.status>=200 && xhr.status<300){
+      statusMsg.className='status ok';
+      statusMsg.textContent='✅ '+file.name+' 上传成功';
+      statusMsg.style.display='block';
+      itemEl.innerHTML='<span>✅</span><span class="name">'+file.name+'</span><span class="size">'+fmtSize(file.size)+'</span>';
+    } else {
+      statusMsg.className='status err';
+      statusMsg.textContent='❌ 上传失败: '+xhr.statusText;
+      statusMsg.style.display='block';
+      itemEl.innerHTML='<span>❌</span><span class="name">'+file.name+'</span><span class="size">'+fmtSize(file.size)+'</span>';
+    }
+  };
+  xhr.onerror = function(){
+    progressWrap.style.display='none';
+    statusMsg.className='status err';
+    statusMsg.textContent='❌ 网络错误，上传失败';
+    statusMsg.style.display='block';
+  };
+  xhr.open('POST', '/api/upload?project_id='+encodeURIComponent(projectId));
+  xhr.send(form);
+}
+</script>
+</body>
+</html>`)
 }

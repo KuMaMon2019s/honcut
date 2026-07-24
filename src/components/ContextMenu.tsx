@@ -19,6 +19,8 @@ interface ContextMenuProps {
   onAddTransition: (type: string) => void;
   /** 打开 MCP 工具参数对话框（P3 全量工具） */
   onOpenTool: (toolName: string) => void;
+  /** P7: 转录文字 */
+  onTranscribe?: () => void;
   onClose: () => void;
 }
 
@@ -31,7 +33,7 @@ const TOOL_MENU_WIDTH = 186;
 
 export default function ContextMenu({
   x, y, clipId, clipName, canSplit, canAddTransition,
-  onSplit, onDuplicate, onDelete, onAddTransition, onOpenTool, onClose,
+  onSplit, onDuplicate, onDelete, onAddTransition, onOpenTool, onTranscribe, onClose,
 }: ContextMenuProps) {
   const [submenuOpen, setSubmenuOpen] = useState<string | null>(null);
   const [categoryOpen, setCategoryOpen] = useState<string | null>(null);
@@ -281,6 +283,19 @@ export default function ContextMenu({
           { maxHeight: catMenuMaxH, overflowY: "auto" },
         )}
       </div>
+
+      {/* P7: 📝 转录文字 */}
+      {onTranscribe && (
+        <div
+          style={itemStyle({ hovered: hoveredItem === "transcribe" })}
+          onMouseEnter={() => { setHoveredItem("transcribe"); setSubmenuOpen(null); setCategoryOpen(null); }}
+          onMouseLeave={() => setHoveredItem(null)}
+          onClick={() => { onClose(); onTranscribe(); }}
+        >
+          <span>📝</span>
+          <span>转录文字</span>
+        </div>
+      )}
 
       <div style={{ height: 1, background: "#333", margin: "4px 0" }} />
 

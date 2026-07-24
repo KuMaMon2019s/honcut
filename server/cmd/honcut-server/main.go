@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -46,12 +47,34 @@ func loadConfig() Config {
 	}
 }
 
-// healthHandler returns 200 OK
-func healthHandler(w http.ResponseWriter, r *http.Request) {
+// getLANIP returns the first non-loopback IPv4 address.
+func getLANIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	for _, addr := range addrs {
+		if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
+			if ip4 := ipNet.IP.To4(); ip4 != nil {
+				return ip4.String()
+			}
+		}
+	}
+	return ""
+}
+
+// healthHandler returns 200 OK with LAN URL for mobile access
+func healthHandler(w http.ResponseWriter, r *http.Request, port string) {
+	lanIP := getLANIP()
+	lanURL := ""
+	if lanIP != "" {
+		lanURL = fmt.Sprintf("http://%s:%s", lanIP, port)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
-		"status": "ok",
+		"status":  "ok",
+		"lan_url": lanURL,
 	})
 }
 
@@ -89,7 +112,9 @@ func main() {
 
 	// HTTP 路由 — 组合 health + REST API + upload + render + config
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", healthHandler)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		healthHandler(w, r, config.Port)
+	})
 	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
 		configHandler(w, r, keystore)
 	})
@@ -97,6 +122,13 @@ func main() {
 	// Mount REST API handler (projects CRUD + upload + MCP)
 	apiHandler := honcutserver.APIHandler(store, renderManager, outputDir)
 	mux.Handle("/api/", apiHandler)
+
+	// P7: Mobile upload page (standalone HTML, not under /api/)
+	mux.HandleFunc("GET /mobile", func(w http.ResponseWriter, r *http.Request) {
+		// Delegate to the API handler's mobile page by rewriting path
+		r.URL.Path = "/mobile"
+		apiHandler.ServeHTTP(w, r)
+	})
 
 	// Mount render API handler
 	renderHandler := render.RenderHandler(renderManager, outputDir)
